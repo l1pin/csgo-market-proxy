@@ -12,7 +12,9 @@
     "axios": "^1.6.2",
     "cookie-parser": "^1.4.6",
     "compression": "^1.7.4",
-    "ws": "^8.14.2"
+    "ws": "^8.14.2",
+    "fs": "0.0.1-security",
+    "path": "^0.12.7"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
