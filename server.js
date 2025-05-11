@@ -1,281 +1,314 @@
 const express = require('express');
-const { createProxyMiddleware } = require('http-proxy-middleware');
+const axios = require('axios');
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
 const zlib = require('zlib');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 const TARGET_HOST = 'https://market.csgo.com';
-const PORT = process.env.PORT || 3000; // Важно для Render
-const LOCAL_HOST = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
 
-console.log('Starting server with:', { PORT, LOCAL_HOST });
+// Получаем базовый URL для текущего хоста
+function getBaseUrl(req) {
+    const protocol = req.secure ? 'https' : 'http';
+    const host = req.get('host');
+    return `${protocol}://${host}`;
+}
 
-// Настройка middleware
 app.use(cookieParser());
 app.use(compression());
 
-// Отключаем кеширование
-app.use((req, res, next) => {
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.set('Pragma', 'no-cache');
-    res.set('Expires', '0');
-    next();
-});
+// Хранилище для cookies сессии
+const sessionCookies = new Map();
 
-// Функция модификации HTML контента
-function modifyHtml(html, currentHost) {
-    if (!html) return html;
-    
+// Функция для получения cookies для сессии
+function getSessionCookies(sessionId) {
+    return sessionCookies.get(sessionId) || {};
+}
+
+// Функция для сохранения cookies сессии
+function saveSessionCookies(sessionId, cookies) {
+    const existing = getSessionCookies(sessionId);
+    sessionCookies.set(sessionId, { ...existing, ...cookies });
+}
+
+// Парсинг cookies из заголовков
+function parseCookies(cookieHeaders) {
+    const cookies = {};
+    if (Array.isArray(cookieHeaders)) {
+        cookieHeaders.forEach(cookie => {
+            const [nameValue] = cookie.split(';');
+            const [name, value] = nameValue.split('=');
+            if (name && value) {
+                cookies[name.trim()] = value.trim();
+            }
+        });
+    }
+    return cookies;
+}
+
+// Создание строки cookies для запроса
+function createCookieString(cookies) {
+    return Object.entries(cookies)
+        .map(([name, value]) => `${name}=${value}`)
+        .join('; ');
+}
+
+// Модификация HTML
+function modifyHtml(html, baseUrl) {
     let modified = html.toString();
     
-    // Заменяем все URL в HTML
-    modified = modified.replace(/https:\/\/market\.csgo\.com/g, currentHost);
-    modified = modified.replace(/\/\/market\.csgo\.com/g, currentHost);
-    modified = modified.replace(/market\.csgo\.com/g, currentHost.replace(/https?:\/\//, ''));
+    // Заменяем все ссылки на market.csgo.com
+    modified = modified.replace(/https:\/\/market\.csgo\.com/g, baseUrl);
+    modified = modified.replace(/\/\/market\.csgo\.com/g, baseUrl);
+    modified = modified.replace(/"\/api\//g, `"${baseUrl}/api/`);
+    modified = modified.replace(/'\/api\//g, `'${baseUrl}/api/`);
     
-    // Добавляем базовый тег
-    if (!modified.includes('<base')) {
-        modified = modified.replace(/<head[^>]*>/i, `$&<base href="${currentHost}/">`);
-    }
-    
-    // Улучшенный скрипт для перехвата запросов
-    const proxyScript = `
-    <script data-proxy-injected="true">
+    // Добавляем скрипт для перехвата навигации
+    const interceptScript = `
+    <script>
     (function() {
-        console.log('🚀 Proxy script initializing...');
+        console.log('🔥 Navigation interceptor active');
         
-        const originalFetch = window.fetch;
-        const originalXHROpen = XMLHttpRequest.prototype.open;
-        const LOCAL_HOST = '${currentHost}';
+        // Сохраняем оригинальные функции
+        const originalPushState = history.pushState;
+        const originalReplaceState = history.replaceState;
+        const originalLocation = window.location;
         
         // Модификация URL
         function modifyUrl(url) {
             if (!url) return url;
-            
-            // Если это уже наш домен, не меняем
-            if (url.includes(window.location.hostname)) {
-                return url;
-            }
-            
-            // Заменяем домен market.csgo.com
             if (url.includes('market.csgo.com')) {
-                return url.replace(/https?:\\/\\/market\\.csgo\\.com/, LOCAL_HOST);
+                return url.replace(/https?:\\/\\/market\\.csgo\\.com/, '${baseUrl}');
             }
-            
-            // Относительные URL
-            if (url.startsWith('/')) {
-                return LOCAL_HOST + url;
-            }
-            
             return url;
         }
         
-        // Перехват fetch
-        window.fetch = function(input, init = {}) {
-            if (typeof input === 'string') {
-                input = modifyUrl(input);
-            } else if (input instanceof Request) {
-                input = new Request(modifyUrl(input.url), input);
+        // Перехват history API
+        history.pushState = function(state, title, url) {
+            url = modifyUrl(url);
+            return originalPushState.call(this, state, title, url);
+        };
+        
+        history.replaceState = function(state, title, url) {
+            url = modifyUrl(url);
+            return originalReplaceState.call(this, state, title, url);
+        };
+        
+        // Перехват всех кликов по ссылкам
+        document.addEventListener('click', function(e) {
+            let target = e.target;
+            while (target && target.tagName !== 'A') {
+                target = target.parentElement;
             }
             
-            init.credentials = init.credentials || 'include';
-            console.log('Fetch intercepted:', input);
-            return originalFetch.call(this, input, init);
-        };
+            if (target && target.tagName === 'A' && target.href) {
+                const href = target.getAttribute('href');
+                if (href && (href.includes('market.csgo.com') || href.startsWith('/'))) {
+                    e.preventDefault();
+                    const newUrl = modifyUrl(target.href);
+                    window.location.href = newUrl;
+                }
+            }
+        }, true);
         
-        // Перехват XMLHttpRequest
-        XMLHttpRequest.prototype.open = function(method, url, async, user, password) {
-            url = modifyUrl(url);
-            console.log('XHR intercepted:', method, url);
-            return originalXHROpen.call(this, method, url, async, user, password);
-        };
-        
-        // Перехват навигации
-        const originalAssign = window.location.assign;
-        const originalReplace = window.location.replace;
-        
-        window.location.assign = function(url) {
-            url = modifyUrl(url);
-            console.log('Navigation intercepted (assign):', url);
-            return originalAssign.call(this, url);
-        };
-        
-        window.location.replace = function(url) {
-            url = modifyUrl(url);
-            console.log('Navigation intercepted (replace):', url);
-            return originalReplace.call(this, url);
-        };
-        
-        // Перехват установки href
-        Object.defineProperty(window.location, 'href', {
+        // Перехват прямых изменений location
+        Object.defineProperty(window, 'location', {
+            get: function() {
+                return originalLocation;
+            },
             set: function(url) {
                 url = modifyUrl(url);
-                console.log('Navigation intercepted (href):', url);
-                this.assign(url);
-            },
-            get: function() {
-                return window.location.toString();
+                originalLocation.href = url;
             }
         });
         
-        console.log('✅ Proxy script initialized successfully');
+        // Перехват XMLHttpRequest
+        const originalOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url) {
+            url = modifyUrl(url);
+            return originalOpen.apply(this, arguments);
+        };
+        
+        // Перехват fetch
+        const originalFetch = window.fetch;
+        window.fetch = function(url, options) {
+            if (typeof url === 'string') {
+                url = modifyUrl(url);
+            }
+            return originalFetch.apply(this, arguments);
+        };
     })();
     </script>
     `;
     
-    modified = modified.replace(/<head[^>]*>/i, '$&' + proxyScript);
+    // Вставляем скрипт перед закрывающим тегом body
+    modified = modified.replace('</body>', interceptScript + '</body>');
     
     return modified;
 }
 
-// Основной прокси middleware
-const proxyMiddleware = createProxyMiddleware({
-    target: TARGET_HOST,
-    changeOrigin: true,
-    followRedirects: false, // Важно! Не следуем редиректам автоматически
-    secure: false,
-    ws: true,
-    cookieDomainRewrite: {
-        'market.csgo.com': '',
-        '.market.csgo.com': ''
-    },
-    onProxyReq: (proxyReq, req, res) => {
-        // Устанавливаем правильные заголовки
-        proxyReq.setHeader('Host', 'market.csgo.com');
-        proxyReq.setHeader('Origin', TARGET_HOST);
-        proxyReq.setHeader('Referer', TARGET_HOST + req.url);
+// Модификация CSS
+function modifyCss(css, baseUrl) {
+    let modified = css.toString();
+    modified = modified.replace(/url\(['"]?https:\/\/market\.csgo\.com/g, `url('${baseUrl}`);
+    modified = modified.replace(/url\(['"]?\/\//g, `url('${baseUrl}/`);
+    return modified;
+}
+
+// Модификация JavaScript
+function modifyJs(js, baseUrl) {
+    let modified = js.toString();
+    modified = modified.replace(/https:\/\/market\.csgo\.com/g, baseUrl);
+    modified = modified.replace(/"\/api\//g, `"${baseUrl}/api/`);
+    modified = modified.replace(/'\/api\//g, `'${baseUrl}/api/`);
+    return modified;
+}
+
+// Основной обработчик всех запросов
+app.use('*', async (req, res) => {
+    try {
+        const baseUrl = getBaseUrl(req);
+        const targetUrl = TARGET_HOST + req.originalUrl;
+        const sessionId = req.cookies.sessionId || Math.random().toString(36).substring(7);
         
-        // Устанавливаем User-Agent как у браузера
-        proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        // Устанавливаем sessionId если его нет
+        if (!req.cookies.sessionId) {
+            res.cookie('sessionId', sessionId, { httpOnly: true, secure: false });
+        }
         
-        // Не отправляем заголовки, которые могут выдать прокси
-        proxyReq.removeHeader('x-forwarded-for');
-        proxyReq.removeHeader('x-forwarded-proto');
-        proxyReq.removeHeader('x-forwarded-host');
+        // Получаем сохраненные cookies для этой сессии
+        const savedCookies = getSessionCookies(sessionId);
+        const cookieString = createCookieString(savedCookies);
         
-        console.log(`➡️  ${req.method} ${req.url}`);
-    },
-    selfHandleResponse: true,
-    onProxyRes: (proxyRes, req, res) => {
-        console.log(`⬅️  ${proxyRes.statusCode} ${req.url}`);
+        console.log(`🚀 ${req.method} ${req.originalUrl} -> ${targetUrl}`);
+        
+        // Настройки запроса
+        const axiosConfig = {
+            method: req.method,
+            url: targetUrl,
+            headers: {
+                ...req.headers,
+                'host': 'market.csgo.com',
+                'origin': TARGET_HOST,
+                'referer': TARGET_HOST,
+                'cookie': cookieString,
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'accept': req.headers.accept || '*/*',
+                'accept-language': 'en-US,en;q=0.9,ru;q=0.8',
+                'sec-fetch-dest': 'document',
+                'sec-fetch-mode': 'navigate',
+                'sec-fetch-site': 'none',
+                'sec-fetch-user': '?1',
+                'upgrade-insecure-requests': '1'
+            },
+            data: req.body,
+            responseType: 'arraybuffer',
+            validateStatus: () => true,
+            maxRedirects: 0,
+            decompress: false
+        };
+        
+        // Удаляем заголовки, которые могут выдать прокси
+        delete axiosConfig.headers['x-forwarded-for'];
+        delete axiosConfig.headers['x-forwarded-proto'];
+        delete axiosConfig.headers['x-forwarded-host'];
+        delete axiosConfig.headers['x-real-ip'];
+        
+        // Делаем запрос
+        const response = await axios(axiosConfig);
+        
+        console.log(`✅ Response: ${response.status} ${response.headers['content-type']}`);
+        
+        // Сохраняем cookies из ответа
+        if (response.headers['set-cookie']) {
+            const newCookies = parseCookies(response.headers['set-cookie']);
+            saveSessionCookies(sessionId, newCookies);
+        }
         
         // Обработка редиректов
-        if (proxyRes.statusCode === 301 || proxyRes.statusCode === 302) {
-            const location = proxyRes.headers.location;
-            if (location && location.includes('market.csgo.com')) {
-                // Перехватываем редирект и меняем на наш домен
-                const newLocation = location.replace(/https?:\/\/market\.csgo\.com/, LOCAL_HOST);
-                proxyRes.headers.location = newLocation;
-                console.log(`🔄 Redirect intercepted: ${location} -> ${newLocation}`);
+        if (response.status === 301 || response.status === 302) {
+            let location = response.headers.location;
+            console.log(`🔄 Original redirect: ${location}`);
+            
+            if (location) {
+                // Если редирект на market.csgo.com, меняем на наш домен
+                if (location.includes('market.csgo.com')) {
+                    location = location.replace(/https?:\/\/market\.csgo\.com/, baseUrl);
+                } else if (location.startsWith('/')) {
+                    location = baseUrl + location;
+                }
+                
+                console.log(`🔄 Modified redirect: ${location}`);
+                return res.redirect(location);
             }
         }
         
-        let body = [];
+        // Получаем контент
+        let content = response.data;
         
-        proxyRes.on('data', (chunk) => {
-            body.push(chunk);
+        // Декомпрессия если нужно
+        const encoding = response.headers['content-encoding'];
+        if (encoding === 'gzip') {
+            content = zlib.gunzipSync(content);
+        } else if (encoding === 'deflate') {
+            content = zlib.inflateSync(content);
+        } else if (encoding === 'br') {
+            content = zlib.brotliDecompressSync(content);
+        }
+        
+        // Модификация контента
+        const contentType = response.headers['content-type'] || '';
+        let modifiedContent = content;
+        
+        if (contentType.includes('text/html')) {
+            modifiedContent = Buffer.from(modifyHtml(content.toString('utf8'), baseUrl), 'utf8');
+        } else if (contentType.includes('text/css')) {
+            modifiedContent = Buffer.from(modifyCss(content.toString('utf8'), baseUrl), 'utf8');
+        } else if (contentType.includes('javascript')) {
+            modifiedContent = Buffer.from(modifyJs(content.toString('utf8'), baseUrl), 'utf8');
+        } else if (contentType.includes('application/json')) {
+            let json = content.toString('utf8');
+            json = json.replace(/https:\/\/market\.csgo\.com/g, baseUrl);
+            modifiedContent = Buffer.from(json, 'utf8');
+        }
+        
+        // Устанавливаем заголовки ответа
+        const responseHeaders = { ...response.headers };
+        delete responseHeaders['content-encoding'];
+        delete responseHeaders['content-length'];
+        delete responseHeaders['content-security-policy'];
+        delete responseHeaders['x-frame-options'];
+        delete responseHeaders['strict-transport-security'];
+        
+        // Устанавливаем новые заголовки
+        Object.entries(responseHeaders).forEach(([key, value]) => {
+            if (key === 'set-cookie') {
+                // Модифицируем cookies
+                if (Array.isArray(value)) {
+                    value = value.map(cookie => {
+                        return cookie
+                            .replace(/domain=.*?;/gi, '')
+                            .replace(/secure;/gi, '')
+                            .replace(/samesite=none;/gi, 'samesite=lax;');
+                    });
+                }
+            }
+            res.set(key, value);
         });
         
-        proxyRes.on('end', () => {
-            let buffer = Buffer.concat(body);
-            
-            // Декодируем если сжато
-            const encoding = proxyRes.headers['content-encoding'];
-            
-            try {
-                if (encoding === 'gzip') {
-                    buffer = zlib.gunzipSync(buffer);
-                } else if (encoding === 'deflate') {
-                    buffer = zlib.inflateSync(buffer);
-                } else if (encoding === 'br') {
-                    buffer = zlib.brotliDecompressSync(buffer);
-                }
-            } catch (e) {
-                console.error('Decompression error:', e);
-            }
-            
-            // Определяем тип контента и модифицируем
-            const contentType = proxyRes.headers['content-type'] || '';
-            let modifiedContent = buffer;
-            
-            try {
-                if (contentType.includes('text/html')) {
-                    modifiedContent = Buffer.from(modifyHtml(buffer.toString('utf8'), LOCAL_HOST));
-                } else if (contentType.includes('javascript')) {
-                    let js = buffer.toString('utf8');
-                    js = js.replace(/https:\/\/market\.csgo\.com/g, LOCAL_HOST);
-                    js = js.replace(/market\.csgo\.com/g, LOCAL_HOST.replace(/https?:\/\//, ''));
-                    modifiedContent = Buffer.from(js);
-                } else if (contentType.includes('text/css')) {
-                    let css = buffer.toString('utf8');
-                    css = css.replace(/url\(['"]?https:\/\/market\.csgo\.com/g, `url('${LOCAL_HOST}`);
-                    css = css.replace(/url\(['"]?\/\//g, `url('${LOCAL_HOST}/`);
-                    modifiedContent = Buffer.from(css);
-                } else if (contentType.includes('application/json')) {
-                    let json = buffer.toString('utf8');
-                    json = json.replace(/https:\/\/market\.csgo\.com/g, LOCAL_HOST);
-                    modifiedContent = Buffer.from(json);
-                }
-            } catch (error) {
-                console.error('Content modification error:', error);
-            }
-            
-            // Удаляем заголовки безопасности
-            delete proxyRes.headers['content-security-policy'];
-            delete proxyRes.headers['x-frame-options'];
-            delete proxyRes.headers['x-content-type-options'];
-            delete proxyRes.headers['strict-transport-security'];
-            
-            // Устанавливаем заголовки ответа
-            res.status(proxyRes.statusCode);
-            Object.keys(proxyRes.headers).forEach(key => {
-                if (key === 'content-encoding') {
-                    return; // Удаляем так как мы декодировали
-                }
-                if (key === 'content-length') {
-                    res.setHeader(key, modifiedContent.length);
-                } else if (key === 'set-cookie') {
-                    // Обрабатываем cookies
-                    const cookies = proxyRes.headers[key];
-                    if (Array.isArray(cookies)) {
-                        res.setHeader(key, cookies.map(cookie => {
-                            return cookie
-                                .replace(/domain=.*?;/gi, '')
-                                .replace(/secure;/gi, '');
-                        }));
-                    }
-                } else {
-                    res.setHeader(key, proxyRes.headers[key]);
-                }
-            });
-            
-            // CORS
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.setHeader('Access-Control-Allow-Credentials', 'true');
-            
-            res.end(modifiedContent);
-        });
+        res.set('content-length', modifiedContent.length);
+        res.status(response.status);
+        res.send(modifiedContent);
+        
+    } catch (error) {
+        console.error('❌ Proxy error:', error);
+        res.status(500).send('Proxy Error: ' + error.message);
     }
 });
 
-// Применяем прокси ко всем маршрутам
-app.use('/', proxyMiddleware);
-
 // Запуск сервера
-const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log('\n✨ Proxy Server Started ✨');
-    console.log(`📡 Port: ${PORT}`);
-    console.log(`🌐 Local URL: ${LOCAL_HOST}`);
-    console.log(`🎯 Target: ${TARGET_HOST}`);
-    console.log('\n');
-});
-
-// Обработка ошибок
-process.on('uncaughtException', (err) => {
-    console.error('Uncaught Exception:', err);
-});
-
-process.on('unhandledRejection', (err) => {
-    console.error('Unhandled Rejection:', err);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Advanced proxy server running on port ${PORT}`);
+    console.log(`🎯 Proxying to ${TARGET_HOST}`);
 });
