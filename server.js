@@ -470,16 +470,9 @@ function modifyUrls(content, baseUrl, contentType = '') {
                                             console.log('Modifying element', index + 1);
                                             el.innerHTML = customization.value;
                                             
-                                            // Добавляем индикатор, что это модифицированное значение
-                                            el.style.position = 'relative';
-                                            
-                                            // Анимация изменения
-                                            el.style.transition = 'background-color 0.5s ease-in-out';
-                                            el.style.backgroundColor = 'rgba(255, 255, 0, 0.3)';
-                                            
-                                            setTimeout(() => {
-                                                el.style.backgroundColor = '';
-                                            }, 1000);
+                                            // Модифицируем элемент без визуальной подсветки
+                                            // Добавляем только скрытый маркер для отладки
+                                            el.setAttribute('data-modified', 'true');
                                         });
                                         
                                         // Если нашли хотя бы один элемент, останавливаем интервал
@@ -739,6 +732,22 @@ app.post('/admin-api/delete-custom-page', express.json(), (req, res) => {
     }
 });
 
+// НОВОЕ: Админ API для сброса всех настроек кастомных страниц
+app.post('/admin-api/reset-all-custom-pages', express.json(), (req, res) => {
+    try {
+        // Очищаем все кастомные страницы
+        customPages.clear();
+        
+        // Сохраняем изменения
+        saveCustomPages();
+        
+        res.json({ success: true, message: 'All custom page configurations have been reset' });
+    } catch (error) {
+        console.error('Error resetting custom pages:', error);
+        res.status(500).json({ error: 'Internal server error while resetting custom pages' });
+    }
+});
+
 // НОВОЕ: Админ API для получения списка всех кастомных страниц
 app.get('/admin-api/list-custom-pages', (req, res) => {
     const list = Array.from(customPages.entries()).map(([url, config]) => ({
@@ -849,8 +858,9 @@ app.get('/adminka', (req, res) => {
                 
                 <div class="col-md-6">
                     <div class="card">
-                        <div class="card-header bg-info text-white">
+                        <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
                             <h5 class="card-title mb-0">Список модифицированных страниц</h5>
+                            <button type="button" id="resetAllBtn" class="btn btn-sm btn-outline-light">Сбросить все</button>
                         </div>
                         <div class="card-body">
                             <div class="list-group" id="customPagesList">
@@ -922,6 +932,26 @@ app.get('/adminka', (req, res) => {
             </div>
         </div>
         
+        <!-- Modal для подтверждения сброса всех настроек -->
+        <div class="modal fade" id="resetAllModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header bg-danger text-white">
+                        <h5 class="modal-title">Подтверждение сброса</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p><strong>Вы уверены, что хотите сбросить ВСЕ модификации?</strong></p>
+                        <p>Это действие нельзя отменить. Все модификации будут удалены.</p>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                        <button type="button" class="btn btn-danger" id="confirmResetAll">Сбросить все</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
         <!-- Система уведомлений -->
         <div class="toast-container"></div>
         
@@ -939,7 +969,10 @@ app.get('/adminka', (req, res) => {
             const customPagesListEl = document.getElementById('customPagesList');
             const deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
             const detailsModal = new bootstrap.Modal(document.getElementById('detailsModal'));
+            const resetAllModal = new bootstrap.Modal(document.getElementById('resetAllModal'));
             const confirmDeleteBtn = document.getElementById('confirmDelete');
+            const confirmResetAllBtn = document.getElementById('confirmResetAll');
+            const resetAllBtn = document.getElementById('resetAllBtn');
             const testButton = document.getElementById('testButton');
             
             // Функция для показа уведомлений
@@ -1202,6 +1235,32 @@ app.get('/adminka', (req, res) => {
                 }, 2000);
             }
             
+            // Сброс всех модификаций
+            async function resetAllCustomPages() {
+                try {
+                    const response = await fetch('/admin-api/reset-all-custom-pages', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({})
+                    });
+                    
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.error || 'Ошибка при сбросе всех модификаций');
+                    }
+                    
+                    showToast('Все модификации успешно сброшены', 'success');
+                    await loadCustomPages();
+                } catch (error) {
+                    console.error('Ошибка сброса:', error);
+                    showToast('Ошибка при сбросе модификаций: ' + error.message, 'danger');
+                } finally {
+                    resetAllModal.hide();
+                }
+            }
+            
             // Инициализация
             document.addEventListener('DOMContentLoaded', () => {
                 // Загружаем список модифицированных страниц
@@ -1210,6 +1269,8 @@ app.get('/adminka', (req, res) => {
                 // Обработчики событий
                 form.addEventListener('submit', saveCustomPage);
                 confirmDeleteBtn.addEventListener('click', deleteCustomPage);
+                confirmResetAllBtn.addEventListener('click', resetAllCustomPages);
+                resetAllBtn.addEventListener('click', () => resetAllModal.show());
                 testButton.addEventListener('click', testSelector);
                 
                 // Добавляем обработчик сообщений от тестового окна
