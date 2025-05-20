@@ -121,14 +121,6 @@ app.use((req, res, next) => {
     next();
 });
 
-// Middleware для логгирования admin-api запросов
-app.use((req, res, next) => {
-    if (req.path.startsWith('/admin-api/')) {
-        console.log(`🔧 Admin API request: ${req.method} ${req.path}`);
-    }
-    next();
-});
-
 // Получение или создание сессии
 function getSession(sessionId) {
     if (!sessions.has(sessionId)) {
@@ -240,232 +232,6 @@ function modifyUrls(content, baseUrl, contentType = '') {
         if (!modified.includes('<base')) {
             modified = modified.replace(/<head[^>]*>/i, `$&<base href="${baseUrl}/">`);
         }
-        
-        // Добавляем скрипт для раннего перехвата и модификации контента
-        const earlyInterceptionScript = `
-        <script>
-        (function() {
-            console.log('🔄 Early Content Interception Activated');
-            
-            // Store page customizations in memory to avoid additional requests
-            const pageCustomizations = new Map();
-            let customizationsLoaded = false;
-            
-            // Preload all customizations at once to avoid multiple requests
-            fetch('/admin-api/list-custom-pages')
-                .then(response => response.json())
-                .then(customPages => {
-                    customPages.forEach(item => {
-                        pageCustomizations.set(item.url, {
-                            selector: item.selector,
-                            value: item.value
-                        });
-                    });
-                    customizationsLoaded = true;
-                    console.log('✅ Loaded ' + pageCustomizations.size + ' content customizations');
-                    checkAndApplyModifications();
-                })
-                .catch(err => console.error('Error loading customizations:', err));
-            
-            // Override the Element.prototype.innerHTML setter
-            const originalInnerHTMLSetter = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML').set;
-            
-            Object.defineProperty(Element.prototype, 'innerHTML', {
-                set: function(value) {
-                    // Apply the original setter
-                    originalInnerHTMLSetter.call(this, value);
-                    
-                    // Then check if this element or its children need modification
-                    if (customizationsLoaded) {
-                        applyModificationsToElement(this);
-                    }
-                    
-                    return value;
-                }
-            });
-            
-            // Create a more aggressive MutationObserver that starts immediately
-            const observer = new MutationObserver((mutations) => {
-                if (customizationsLoaded) {
-                    mutations.forEach(mutation => {
-                        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-                            mutation.addedNodes.forEach(node => {
-                                if (node.nodeType === 1) { // ELEMENT_NODE
-                                    applyModificationsToElement(node);
-                                }
-                            });
-                        }
-                    });
-                }
-            });
-            
-            // Start observing immediately
-            observer.observe(document.documentElement || document, {
-                childList: true,
-                subtree: true
-            });
-            
-            // Function to check if current page has customizations and apply them
-            function checkAndApplyModifications() {
-                if (!customizationsLoaded) return;
-                
-                const currentUrl = window.location.href;
-                
-                // Check if we have customizations for this exact URL
-                if (pageCustomizations.has(currentUrl)) {
-                    const customization = pageCustomizations.get(currentUrl);
-                    console.log('🎯 Found customization for current page:', customization.selector);
-                    applyModificationToSelector(customization.selector, customization.value);
-                }
-                
-                // Also check for partial URL matches (for dynamic pages)
-                pageCustomizations.forEach((customization, url) => {
-                    if (currentUrl !== url && currentUrl.includes(url.split('?')[0])) {
-                        console.log('🎯 Found partial URL match customization:', url);
-                        applyModificationToSelector(customization.selector, customization.value);
-                    }
-                });
-            }
-            
-            // Function to apply modifications to a specific element and its children
-            function applyModificationsToElement(element) {
-                if (!element || !customizationsLoaded) return;
-                
-                // Apply for the current page URL
-                const currentUrl = window.location.href;
-                
-                // Direct URL match
-                if (pageCustomizations.has(currentUrl)) {
-                    const customization = pageCustomizations.get(currentUrl);
-                    applyModificationToElement(element, customization.selector, customization.value);
-                }
-                
-                // Partial URL matches
-                pageCustomizations.forEach((customization, url) => {
-                    if (currentUrl !== url && currentUrl.includes(url.split('?')[0])) {
-                        applyModificationToElement(element, customization.selector, customization.value);
-                    }
-                });
-            }
-            
-            // Helper function to apply modification to a specific element if it matches selector
-            function applyModificationToElement(element, selector, newValue) {
-                try {
-                    // Check if the element itself matches
-                    if (element.matches && element.matches(selector)) {
-                        if (element.innerHTML !== newValue && !element.hasAttribute('data-modified')) {
-                            console.log('✏️ Modifying matching element:', selector);
-                            element.innerHTML = newValue;
-                            element.setAttribute('data-modified', 'true');
-                        }
-                    }
-                    
-                    // Check children with traditional querySelectorAll
-                    const elements = element.querySelectorAll(selector);
-                    if (elements.length > 0) {
-                        elements.forEach(el => {
-                            if (el.innerHTML !== newValue && !el.hasAttribute('data-modified')) {
-                                console.log('✏️ Modifying child element:', selector);
-                                el.innerHTML = newValue;
-                                el.setAttribute('data-modified', 'true');
-                            }
-                        });
-                    }
-                    
-                    // Try flexible selector (without Angular dynamic parts)
-                    if ((selector.includes('_ngcontent-') || selector.includes('ng-')) && elements.length === 0) {
-                        const flexibleSelector = selector
-                            .replace(/_ngcontent-[^"'\\s=]*-c\\d+/g, '*')
-                            .replace(/\\.ng-[^\\s.>]+/g, '');
-                        
-                        const flexElements = element.querySelectorAll(flexibleSelector);
-                        if (flexElements.length > 0) {
-                            console.log('✏️ Using flexible selector:', flexibleSelector);
-                            flexElements.forEach(el => {
-                                if (el.innerHTML !== newValue && !el.hasAttribute('data-modified')) {
-                                    el.innerHTML = newValue;
-                                    el.setAttribute('data-modified', 'true');
-                                }
-                            });
-                        }
-                    }
-                } catch (error) {
-                    console.error('Error applying modification:', error);
-                }
-            }
-            
-            // Function to apply modification using querySelectorAll
-            function applyModificationToSelector(selector, newValue) {
-                try {
-                    // Standard selector
-                    const elements = document.querySelectorAll(selector);
-                    if (elements.length > 0) {
-                        elements.forEach(el => {
-                            if (el.innerHTML !== newValue && !el.hasAttribute('data-modified')) {
-                                console.log('✏️ Applied modification to', elements.length, 'elements');
-                                el.innerHTML = newValue;
-                                el.setAttribute('data-modified', 'true');
-                            }
-                        });
-                        return;
-                    }
-                    
-                    // Try flexible selector for Angular components
-                    if (selector.includes('_ngcontent-') || selector.includes('ng-')) {
-                        const flexibleSelector = selector
-                            .replace(/_ngcontent-[^"'\\s=]*-c\\d+/g, '*')
-                            .replace(/\\.ng-[^\\s.>]+/g, '');
-                        
-                        const flexElements = document.querySelectorAll(flexibleSelector);
-                        if (flexElements.length > 0) {
-                            flexElements.forEach(el => {
-                                if (el.innerHTML !== newValue && !el.hasAttribute('data-modified')) {
-                                    console.log('✏️ Applied modification with flexible selector');
-                                    el.innerHTML = newValue;
-                                    el.setAttribute('data-modified', 'true');
-                                }
-                            });
-                        }
-                    }
-                } catch (error) {
-                    console.error('Error applying modification to selector:', error);
-                }
-            }
-            
-            // Setup DOM ready handler - apply as early as possible
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', checkAndApplyModifications);
-            } else {
-                setTimeout(checkAndApplyModifications, 0);
-            }
-            
-            // Also check when page is fully loaded
-            window.addEventListener('load', checkAndApplyModifications);
-            
-            // Check when URL changes via History API
-            const originalPushState = history.pushState;
-            const originalReplaceState = history.replaceState;
-            
-            history.pushState = function() {
-                originalPushState.apply(this, arguments);
-                setTimeout(checkAndApplyModifications, 0);
-            };
-            
-            history.replaceState = function() {
-                originalReplaceState.apply(this, arguments);
-                setTimeout(checkAndApplyModifications, 0);
-            };
-            
-            // Check on navigation events
-            window.addEventListener('popstate', () => setTimeout(checkAndApplyModifications, 0));
-            
-            console.log('🚀 Early content interception ready');
-        })();
-        </script>
-        `;
-        
-        // Инжектим наш скрипт раннего перехвата в начало <head> тега
-        modified = modified.replace(/<head[^>]*>/i, `$&${earlyInterceptionScript}`);
         
         // Инжектим улучшенный прокси скрипт с исправлениями для GraphQL и WebSocket
         const proxyScript = `
@@ -857,9 +623,6 @@ function modifyUrls(content, baseUrl, contentType = '') {
         </script>
         `;
         
-        // Добавляем стандартный скрипт прокси
-        modified = modified.replace(/<head[^>]*>/i, `$&${proxyScript}`);
-        
         // Добавляем скрипт для перехвата кнопок логина
         const loginButtonsScript = `
         <script>
@@ -1092,6 +855,7 @@ function modifyUrls(content, baseUrl, contentType = '') {
 </script>
         `;
         
+        modified = modified.replace(/<head[^>]*>/i, `$&${proxyScript}`);
         modified = modified.replace('</body>', loginButtonsScript + '</body>');
     }
     
@@ -1459,487 +1223,593 @@ setInterval(() => {
     }
 }, 60 * 1000); // Проверка каждую минуту
 
-// ===== FIX: Создаем HTML файл для админ-панели =====
-const adminPanelHtml = `<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Админ-панель CSGO Market Proxy</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
-    <style>
-        body {
-            padding: 20px;
-            background-color: #f8f9fa;
-        }
-        .card {
-            margin-bottom: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        .form-control {
-            margin-bottom: 15px;
-        }
-        .list-group-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .badge {
-            font-size: 0.8em;
-        }
-        .value-preview {
-            max-width: 150px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .actions {
-            display: flex;
-            gap: 5px;
-        }
-        .modified-time {
-            font-size: 0.8em;
-            color: #6c757d;
-        }
-        .url-preview {
-            max-width: 250px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .toast-container {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            z-index: 1000;
-        }
-        .selector-info {
-            background-color: #f0f8ff;
-            padding: 10px;
-            border-radius: 4px;
-            margin-top: 10px;
-            border-left: 3px solid #007bff;
-        }
-        .tip-section {
-            border-radius: 5px;
-            padding: 15px;
-            margin-bottom: 15px;
-            background-color: #e9f7ef;
-            border-left: 4px solid #28a745;
-        }
-        .tip-title {
-            color: #28a745;
-            font-weight: bold;
-            margin-bottom: 10px;
-        }
-        .clickable-selector {
-            cursor: pointer;
-            color: #007bff;
-            text-decoration: underline dotted;
-        }
-        .clickable-selector:hover {
-            color: #0056b3;
-        }
-        .text-highlight {
-            background-color: #fff3cd;
-            padding: 2px 4px;
-            border-radius: 3px;
-        }
-        #flexibleSelectorOutput {
-            font-family: monospace;
-            font-size: 0.9em;
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1 class="mb-4">
-            <i class="bi bi-gear-fill text-primary me-2"></i>
-            Админ-панель CSGO Market Proxy
-        </h1>
+// Админ API для проверки кастомных страниц
+app.get('/admin-api/check-custom-page', (req, res) => {
+    const urlToCheck = req.query.url;
+    
+    if (!urlToCheck) {
+        return res.status(400).json({ error: 'URL parameter is required' });
+    }
+    
+    // Проверяем, есть ли для этого URL настройки
+    const hasCustomizations = customPages.has(urlToCheck);
+    
+    res.json({ hasCustomizations });
+});
+
+// Админ API для получения настроек кастомной страницы
+app.get('/admin-api/get-custom-page', (req, res) => {
+    const urlToCheck = req.query.url;
+    
+    if (!urlToCheck) {
+        return res.status(400).json({ error: 'URL parameter is required' });
+    }
+    
+    // Получаем настройки для URL
+    const customization = customPages.get(urlToCheck);
+    
+    if (!customization) {
+        return res.status(404).json({ error: 'Custom page configuration not found' });
+    }
+    
+    res.json(customization);
+});
+
+// Админ API для сохранения настроек кастомной страницы
+app.post('/admin-api/save-custom-page', express.json(), (req, res) => {
+    const { url, selector, value } = req.body;
+    
+    if (!url || !selector || value === undefined) {
+        return res.status(400).json({ error: 'URL, selector, and value are required' });
+    }
+    
+    // Сохраняем настройки
+    customPages.set(url, {
+        selector,
+        value,
+        timestamp: Date.now()
+    });
+    
+    // Сохраняем в файл
+    saveCustomPages();
+    
+    res.json({ success: true, message: 'Custom page configuration saved' });
+});
+
+// Админ API для удаления настроек кастомной страницы
+app.post('/admin-api/delete-custom-page', express.json(), (req, res) => {
+    const { url } = req.body;
+    
+    if (!url) {
+        return res.status(400).json({ error: 'URL parameter is required' });
+    }
+    
+    // Удаляем настройки
+    const deleted = customPages.delete(url);
+    
+    // Сохраняем изменения
+    saveCustomPages();
+    
+    if (deleted) {
+        res.json({ success: true, message: 'Custom page configuration deleted' });
+    } else {
+        res.status(404).json({ error: 'Custom page configuration not found' });
+    }
+});
+
+// Админ API для сброса всех настроек кастомных страниц
+app.post('/admin-api/reset-all-custom-pages', express.json(), (req, res) => {
+    try {
+        // Очищаем все кастомные страницы
+        customPages.clear();
         
-        <div class="tip-section mb-4">
-            <h4 class="tip-title">
-                <i class="bi bi-lightbulb-fill me-2"></i>
-                Советы по эффективной подмене контента
-            </h4>
-            <ul>
-                <li>Используйте инструменты разработчика браузера (F12) для копирования CSS-селектора нужного элемента</li>
-                <li>Для Angular-приложений селекторы могут содержать динамические классы (например, <code>_ngcontent-serverapp-c3726111741</code>), которые могут меняться. Наша система автоматически пытается обрабатывать такие случаи, но старайтесь избегать таких частей в селекторе</li>
-                <li>Наиболее надежные селекторы опираются на стабильные ID и классы, а не на структуру DOM</li>
-                <li>Чтобы подменить текст в элементе, сохраняйте исходную HTML-структуру, включая классы, но меняйте содержимое</li>
-                <li>Используйте кнопку "Проверить селектор" для быстрого тестирования селектора перед сохранением</li>
-            </ul>
-        </div>
+        // Сохраняем изменения
+        saveCustomPages();
         
-        <div class="row">
-            <div class="col-md-6">
-                <div class="card">
-                    <div class="card-header bg-primary text-white">
-                        <h5 class="card-title mb-0">
-                            <i class="bi bi-pencil-square me-2"></i>
-                            Добавить/Изменить настройки страницы
-                        </h5>
-                    </div>
-                    <div class="card-body">
-                        <form id="customPageForm">
-                            <div class="mb-3">
-                                <label for="pageUrl" class="form-label">URL страницы</label>
-                                <div class="input-group">
-                                    <span class="input-group-text"><i class="bi bi-link-45deg"></i></span>
-                                    <input type="text" class="form-control" id="pageUrl" placeholder="https://market-csgo.co/ru/Gloves/..." required>
-                                    <button type="button" class="btn btn-outline-secondary" id="pageUrlFromTab">
-                                        <i class="bi bi-clipboard"></i>
-                                    </button>
-                                </div>
-                                <div class="form-text">Полный URL страницы, которую хотите модифицировать</div>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <label for="cssSelector" class="form-label">CSS селектор</label>
-                                <div class="input-group">
-                                    <span class="input-group-text"><i class="bi bi-code-slash"></i></span>
-                                    <input type="text" class="form-control" id="cssSelector" placeholder="#app > app-main-site > div > app-full-inventory-info > span" required>
-                                    <button type="button" class="btn btn-outline-secondary" id="analyzeSelectorBtn">
-                                        <i class="bi bi-braces"></i>
-                                    </button>
-                                </div>
-                                <div class="form-text">CSS селектор элемента, значение которого нужно изменить</div>
-                                
-                                <div id="selectorInfo" class="selector-info mt-2 d-none">
-                                    <h6><i class="bi bi-info-circle-fill me-2"></i>Анализ селектора</h6>
-                                    <div>
-                                        <strong>Гибкий селектор:</strong>
-                                        <div id="flexibleSelectorOutput"></div>
-                                    </div>
-                                    <small class="text-muted">Гибкий селектор более устойчив к изменениям в Angular-компонентах</small>
-                                </div>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <label for="customValue" class="form-label">Новое значение</label>
-                                <textarea class="form-control" id="customValue" rows="3" placeholder="Введите новое значение..." required></textarea>
-                                <div class="form-text">HTML-код или текст, который будет отображаться в выбранном элементе</div>
-                            </div>
-                            
-                            <div class="d-flex gap-2">
-                                <button type="submit" class="btn btn-primary">
-                                    <i class="bi bi-save me-1"></i> Сохранить
-                                </button>
-                                <button type="button" id="testButton" class="btn btn-outline-secondary">
-                                    <i class="bi bi-eye me-1"></i> Проверить селектор
-                                </button>
-                                <button type="button" id="clearFormBtn" class="btn btn-outline-danger">
-                                    <i class="bi bi-x-circle me-1"></i> Очистить
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-                
-                <div class="card mt-4">
-                    <div class="card-header bg-info text-white">
-                        <h5 class="card-title mb-0">
-                            <i class="bi bi-question-circle me-2"></i>
-                            Помощь по селекторам
-                        </h5>
-                    </div>
-                    <div class="card-body">
-                        <p>Примеры CSS-селекторов для часто используемых элементов:</p>
-                        <ul>
-                            <li>
-                                <span class="clickable-selector" data-selector="#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-info-wrap > div > app-page-inventory-price > div > span:nth-child(1)">
-                                    Цена предмета (основная)
-                                </span>
-                            </li>
-                            <li>
-                                <span class="clickable-selector" data-selector=".price-value">
-                                    Цена предмета (по классу)
-                                </span>
-                            </li>
-                            <li>
-                                <span class="clickable-selector" data-selector="#app > app-main-site .inventory-info-table tr:nth-child(2) td:nth-child(2)">
-                                    Характеристика Float Value
-                                </span>
-                            </li>
-                            <li>
-                                <span class="clickable-selector" data-selector="#app > app-main-site .inventory-info-table td:contains('Float') + td">
-                                    Float Value (альтернатива)
-                                </span>
-                            </li>
-                        </ul>
-                        <div class="mt-3">
-                            <p><strong>Как получить селектор:</strong></p>
-                            <ol>
-                                <li>Откройте страницу в браузере</li>
-                                <li>Нажмите F12 для открытия инструментов разработчика</li>
-                                <li>Кликните правой кнопкой на нужный элемент</li>
-                                <li>Выберите "Inspect" (Исследовать)</li>
-                                <li>В появившемся коде правый клик → Copy → Copy selector</li>
-                            </ol>
-                        </div>
-                    </div>
-                </div>
+        res.json({ success: true, message: 'All custom page configurations have been reset' });
+    } catch (error) {
+        console.error('Error resetting custom pages:', error);
+        res.status(500).json({ error: 'Internal server error while resetting custom pages' });
+    }
+});
+
+// Админ API для получения списка всех кастомных страниц
+app.get('/admin-api/list-custom-pages', (req, res) => {
+    const list = Array.from(customPages.entries()).map(([url, config]) => ({
+        url,
+        selector: config.selector,
+        value: config.value,
+        timestamp: config.timestamp
+    }));
+    
+    res.json(list);
+});
+
+// Улучшенная админ-панель со встроенным тестированием селекторов и поддержкой динамических классов
+app.get('/adminka', (req, res) => {
+    // HTML для админ-панели
+    const html = `
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Админ-панель CSGO Market Proxy</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+        <style>
+            body {
+                padding: 20px;
+                background-color: #f8f9fa;
+            }
+            .card {
+                margin-bottom: 20px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
+            .form-control {
+                margin-bottom: 15px;
+            }
+            .list-group-item {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .badge {
+                font-size: 0.8em;
+            }
+            .value-preview {
+                max-width: 150px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .actions {
+                display: flex;
+                gap: 5px;
+            }
+            .modified-time {
+                font-size: 0.8em;
+                color: #6c757d;
+            }
+            .url-preview {
+                max-width: 250px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .toast-container {
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                z-index: 1000;
+            }
+            .selector-info {
+                background-color: #f0f8ff;
+                padding: 10px;
+                border-radius: 4px;
+                margin-top: 10px;
+                border-left: 3px solid #007bff;
+            }
+            .tip-section {
+                border-radius: 5px;
+                padding: 15px;
+                margin-bottom: 15px;
+                background-color: #e9f7ef;
+                border-left: 4px solid #28a745;
+            }
+            .tip-title {
+                color: #28a745;
+                font-weight: bold;
+                margin-bottom: 10px;
+            }
+            .clickable-selector {
+                cursor: pointer;
+                color: #007bff;
+                text-decoration: underline dotted;
+            }
+            .clickable-selector:hover {
+                color: #0056b3;
+            }
+            .text-highlight {
+                background-color: #fff3cd;
+                padding: 2px 4px;
+                border-radius: 3px;
+            }
+            #flexibleSelectorOutput {
+                font-family: monospace;
+                font-size: 0.9em;
+                white-space: pre-wrap;
+                word-break: break-all;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1 class="mb-4">
+                <i class="bi bi-gear-fill text-primary me-2"></i>
+                Админ-панель CSGO Market Proxy
+            </h1>
+            
+            <div class="tip-section mb-4">
+                <h4 class="tip-title">
+                    <i class="bi bi-lightbulb-fill me-2"></i>
+                    Советы по эффективной подмене контента
+                </h4>
+                <ul>
+                    <li>Используйте инструменты разработчика браузера (F12) для копирования CSS-селектора нужного элемента</li>
+                    <li>Для Angular-приложений селекторы могут содержать динамические классы (например, <code>_ngcontent-serverapp-c3726111741</code>), которые могут меняться. Наша система автоматически пытается обрабатывать такие случаи, но старайтесь избегать таких частей в селекторе</li>
+                    <li>Наиболее надежные селекторы опираются на стабильные ID и классы, а не на структуру DOM</li>
+                    <li>Чтобы подменить текст в элементе, сохраняйте исходную HTML-структуру, включая классы, но меняйте содержимое</li>
+                    <li>Используйте кнопку "Проверить селектор" для быстрого тестирования селектора перед сохранением</li>
+                </ul>
             </div>
             
-            <div class="col-md-6">
-                <div class="card">
-                    <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
-                        <h5 class="card-title mb-0">
-                            <i class="bi bi-list-check me-2"></i>
-                            Список модифицированных страниц
-                        </h5>
-                        <div>
-                            <button type="button" id="refreshListBtn" class="btn btn-sm btn-outline-light me-2">
-                                <i class="bi bi-arrow-clockwise"></i> Обновить
-                            </button>
-                            <button type="button" id="resetAllBtn" class="btn btn-sm btn-outline-light">
-                                <i class="bi bi-trash"></i> Сбросить все
-                            </button>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header bg-primary text-white">
+                            <h5 class="card-title mb-0">
+                                <i class="bi bi-pencil-square me-2"></i>
+                                Добавить/Изменить настройки страницы
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <form id="customPageForm">
+                                <div class="mb-3">
+                                    <label for="pageUrl" class="form-label">URL страницы</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="bi bi-link-45deg"></i></span>
+                                        <input type="text" class="form-control" id="pageUrl" placeholder="https://market-csgo.co/ru/Gloves/..." required>
+                                        <button type="button" class="btn btn-outline-secondary" id="pageUrlFromTab">
+                                            <i class="bi bi-clipboard"></i>
+                                        </button>
+                                    </div>
+                                    <div class="form-text">Полный URL страницы, которую хотите модифицировать</div>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label for="cssSelector" class="form-label">CSS селектор</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="bi bi-code-slash"></i></span>
+                                        <input type="text" class="form-control" id="cssSelector" placeholder="#app > app-main-site > div > app-full-inventory-info > span" required>
+                                        <button type="button" class="btn btn-outline-secondary" id="analyzeSelectorBtn">
+                                            <i class="bi bi-braces"></i>
+                                        </button>
+                                    </div>
+                                    <div class="form-text">CSS селектор элемента, значение которого нужно изменить</div>
+                                    
+                                    <div id="selectorInfo" class="selector-info mt-2 d-none">
+                                        <h6><i class="bi bi-info-circle-fill me-2"></i>Анализ селектора</h6>
+                                        <div>
+                                            <strong>Гибкий селектор:</strong>
+                                            <div id="flexibleSelectorOutput"></div>
+                                        </div>
+                                        <small class="text-muted">Гибкий селектор более устойчив к изменениям в Angular-компонентах</small>
+                                    </div>
+                                </div>
+                                
+                                <div class="mb-3">
+                                    <label for="customValue" class="form-label">Новое значение</label>
+                                    <textarea class="form-control" id="customValue" rows="3" placeholder="Введите новое значение..." required></textarea>
+                                    <div class="form-text">HTML-код или текст, который будет отображаться в выбранном элементе</div>
+                                </div>
+                                
+                                <div class="d-flex gap-2">
+                                    <button type="submit" class="btn btn-primary">
+                                        <i class="bi bi-save me-1"></i> Сохранить
+                                    </button>
+                                    <button type="button" id="testButton" class="btn btn-outline-secondary">
+                                        <i class="bi bi-eye me-1"></i> Проверить селектор
+                                    </button>
+                                    <button type="button" id="clearFormBtn" class="btn btn-outline-danger">
+                                        <i class="bi bi-x-circle me-1"></i> Очистить
+                                    </button>
+                                </div>
+                            </form>
                         </div>
                     </div>
-                    <div class="card-body">
-                        <div class="input-group mb-3">
-                            <span class="input-group-text"><i class="bi bi-search"></i></span>
-                            <input type="text" class="form-control" id="searchList" placeholder="Поиск по URL или селектору...">
+                    
+                    <div class="card mt-4">
+                        <div class="card-header bg-info text-white">
+                            <h5 class="card-title mb-0">
+                                <i class="bi bi-question-circle me-2"></i>
+                                Помощь по селекторам
+                            </h5>
                         </div>
-                        
-                        <div class="list-group" id="customPagesList">
-                            <div class="text-center py-4 text-muted">
-                                <div class="spinner-border spinner-border-sm" role="status">
-                                    <span class="visually-hidden">Загрузка...</span>
-                                </div>
-                                Загрузка списка...
+                        <div class="card-body">
+                            <p>Примеры CSS-селекторов для часто используемых элементов:</p>
+                            <ul>
+                                <li>
+                                    <span class="clickable-selector" data-selector="#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-info-wrap > div > app-page-inventory-price > div > span:nth-child(1)">
+                                        Цена предмета (основная)
+                                    </span>
+                                </li>
+                                <li>
+                                    <span class="clickable-selector" data-selector=".price-value">
+                                        Цена предмета (по классу)
+                                    </span>
+                                </li>
+                                <li>
+                                    <span class="clickable-selector" data-selector="#app > app-main-site .inventory-info-table tr:nth-child(2) td:nth-child(2)">
+                                        Характеристика Float Value
+                                    </span>
+                                </li>
+                                <li>
+                                    <span class="clickable-selector" data-selector="#app > app-main-site .inventory-info-table td:contains('Float') + td">
+                                        Float Value (альтернатива)
+                                    </span>
+                                </li>
+                            </ul>
+                            <div class="mt-3">
+                                <p><strong>Как получить селектор:</strong></p>
+                                <ol>
+                                    <li>Откройте страницу в браузере</li>
+                                    <li>Нажмите F12 для открытия инструментов разработчика</li>
+                                    <li>Кликните правой кнопкой на нужный элемент</li>
+                                    <li>Выберите "Inspect" (Исследовать)</li>
+                                    <li>В появившемся коде правый клик → Copy → Copy selector</li>
+                                </ol>
                             </div>
                         </div>
                     </div>
                 </div>
                 
-                <div class="card mt-4">
-                    <div class="card-header bg-success text-white">
-                        <h5 class="card-title mb-0">
-                            <i class="bi bi-lightning-charge me-2"></i>
-                            Проверка работы
-                        </h5>
-                    </div>
-                    <div class="card-body">
-                        <div class="d-grid gap-3">
-                            <button type="button" id="testOpenUrlBtn" class="btn btn-outline-primary d-flex justify-content-between align-items-center">
-                                <span>
-                                    <i class="bi bi-box-arrow-up-right me-2"></i>
-                                    Открыть текущий URL в новом окне
-                                </span>
-                                <i class="bi bi-chevron-right"></i>
-                            </button>
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+                            <h5 class="card-title mb-0">
+                                <i class="bi bi-list-check me-2"></i>
+                                Список модифицированных страниц
+                            </h5>
+                            <div>
+                                <button type="button" id="refreshListBtn" class="btn btn-sm btn-outline-light me-2">
+                                    <i class="bi bi-arrow-clockwise"></i> Обновить
+                                </button>
+                                <button type="button" id="resetAllBtn" class="btn btn-sm btn-outline-light">
+                                    <i class="bi bi-trash"></i> Сбросить все
+                                </button>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div class="input-group mb-3">
+                                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                                <input type="text" class="form-control" id="searchList" placeholder="Поиск по URL или селектору...">
+                            </div>
                             
-                            <button type="button" id="applyChangesBtn" class="btn btn-outline-success d-flex justify-content-between align-items-center">
-                                <span>
-                                    <i class="bi bi-check2-circle me-2"></i>
-                                    Применить изменения на открытой странице
-                                </span>
-                                <i class="bi bi-chevron-right"></i>
-                            </button>
-                            
-                            <button type="button" id="checkStatusBtn" class="btn btn-outline-info d-flex justify-content-between align-items-center">
-                                <span>
-                                    <i class="bi bi-activity me-2"></i>
-                                    Проверить статус прокси
-                                </span>
-                                <i class="bi bi-chevron-right"></i>
-                            </button>
+                            <div class="list-group" id="customPagesList">
+                                <div class="text-center py-4 text-muted">
+                                    <div class="spinner-border spinner-border-sm" role="status">
+                                        <span class="visually-hidden">Загрузка...</span>
+                                    </div>
+                                    Загрузка списка...
+                                </div>
+                            </div>
                         </div>
-                        
-                        <div class="alert alert-success mt-3 d-none" id="statusAlert">
-                            <i class="bi bi-check-circle-fill me-2"></i>
-                            Прокси работает нормально
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Modal для подтверждения удаления -->
-    <div class="modal fade" id="deleteModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header bg-danger text-white">
-                    <h5 class="modal-title">
-                        <i class="bi bi-exclamation-triangle me-2"></i>
-                        Подтверждение удаления
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <p>Вы уверены, что хотите удалить настройки для страницы?</p>
-                    <p id="deleteModalUrl" class="text-break small"></p>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
-                        <i class="bi bi-x-circle me-1"></i> Отмена
-                    </button>
-                    <button type="button" class="btn btn-danger" id="confirmDelete">
-                        <i class="bi bi-trash me-1"></i> Удалить
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Modal для просмотра деталей -->
-    <div class="modal fade" id="detailsModal" tabindex="-1">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header bg-primary text-white">
-                    <h5 class="modal-title">
-                        <i class="bi bi-info-circle me-2"></i>
-                        Детали модификации
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">URL:</label>
-                        <div id="detailUrl" class="text-break"></div>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">CSS селектор:</label>
-                        <div id="detailSelector" class="text-break"></div>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Значение:</label>
-                        <div id="detailValue" class="border p-2 bg-light"></div>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-bold">Дата изменения:</label>
-                        <div id="detailTimestamp"></div>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
-                        <i class="bi bi-x me-1"></i> Закрыть
-                    </button>
-                    <a href="#" class="btn btn-primary" id="viewPageBtn" target="_blank">
-                        <i class="bi bi-box-arrow-up-right me-1"></i> Открыть страницу
-                    </a>
-                    <button type="button" class="btn btn-warning" id="editItemBtn">
-                        <i class="bi bi-pencil me-1"></i> Редактировать
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Modal для подтверждения сброса всех настроек -->
-    <div class="modal fade" id="resetAllModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header bg-danger text-white">
-                    <h5 class="modal-title">
-                        <i class="bi bi-exclamation-triangle me-2"></i>
-                        Подтверждение сброса
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <p><strong>Вы уверены, что хотите сбросить ВСЕ модификации?</strong></p>
-                    <p>Это действие нельзя отменить. Все модификации будут удалены.</p>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
-                        <i class="bi bi-x-circle me-1"></i> Отмена
-                    </button>
-                    <button type="button" class="btn btn-danger" id="confirmResetAll">
-                        <i class="bi bi-trash me-1"></i> Сбросить все
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Modal для проверки селектора -->
-    <div class="modal fade" id="testSelectorModal" tabindex="-1">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header bg-primary text-white">
-                    <h5 class="modal-title">
-                        <i class="bi bi-search me-2"></i>
-                        Тестирование селектора
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <div id="testSelectorLoading" class="text-center py-3">
-                        <div class="spinner-border text-primary" role="status">
-                            <span class="visually-hidden">Загрузка...</span>
-                        </div>
-                        <p class="mt-2">Открываем страницу и проверяем селектор...</p>
                     </div>
                     
-                    <div id="testSelectorResult" class="d-none">
-                        <div class="alert alert-success mb-3 d-none" id="testSelectorSuccess">
-                            <i class="bi bi-check-circle-fill me-2"></i>
-                            <span id="testSelectorSuccessText">Найдены элементы, соответствующие селектору!</span>
+                    <div class="card mt-4">
+                        <div class="card-header bg-success text-white">
+                            <h5 class="card-title mb-0">
+                                <i class="bi bi-lightning-charge me-2"></i>
+                                Проверка работы
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="d-grid gap-3">
+                                <button type="button" id="testOpenUrlBtn" class="btn btn-outline-primary d-flex justify-content-between align-items-center">
+                                    <span>
+                                        <i class="bi bi-box-arrow-up-right me-2"></i>
+                                        Открыть текущий URL в новом окне
+                                    </span>
+                                    <i class="bi bi-chevron-right"></i>
+                                </button>
+                                
+                                <button type="button" id="applyChangesBtn" class="btn btn-outline-success d-flex justify-content-between align-items-center">
+                                    <span>
+                                        <i class="bi bi-check2-circle me-2"></i>
+                                        Применить изменения на открытой странице
+                                    </span>
+                                    <i class="bi bi-chevron-right"></i>
+                                </button>
+                                
+                                <button type="button" id="checkStatusBtn" class="btn btn-outline-info d-flex justify-content-between align-items-center">
+                                    <span>
+                                        <i class="bi bi-activity me-2"></i>
+                                        Проверить статус прокси
+                                    </span>
+                                    <i class="bi bi-chevron-right"></i>
+                                </button>
+                            </div>
+                            
+                            <div class="alert alert-success mt-3 d-none" id="statusAlert">
+                                <i class="bi bi-check-circle-fill me-2"></i>
+                                Прокси работает нормально
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Modal для подтверждения удаления -->
+        <div class="modal fade" id="deleteModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header bg-danger text-white">
+                        <h5 class="modal-title">
+                            <i class="bi bi-exclamation-triangle me-2"></i>
+                            Подтверждение удаления
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p>Вы уверены, что хотите удалить настройки для страницы?</p>
+                        <p id="deleteModalUrl" class="text-break small"></p>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                            <i class="bi bi-x-circle me-1"></i> Отмена
+                        </button>
+                        <button type="button" class="btn btn-danger" id="confirmDelete">
+                            <i class="bi bi-trash me-1"></i> Удалить
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Modal для просмотра деталей -->
+        <div class="modal fade" id="detailsModal" tabindex="-1">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header bg-primary text-white">
+                        <h5 class="modal-title">
+                            <i class="bi bi-info-circle me-2"></i>
+                            Детали модификации
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">URL:</label>
+                            <div id="detailUrl" class="text-break"></div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">CSS селектор:</label>
+                            <div id="detailSelector" class="text-break"></div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Значение:</label>
+                            <div id="detailValue" class="border p-2 bg-light"></div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Дата изменения:</label>
+                            <div id="detailTimestamp"></div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                            <i class="bi bi-x me-1"></i> Закрыть
+                        </button>
+                        <a href="#" class="btn btn-primary" id="viewPageBtn" target="_blank">
+                            <i class="bi bi-box-arrow-up-right me-1"></i> Открыть страницу
+                        </a>
+                        <button type="button" class="btn btn-warning" id="editItemBtn">
+                            <i class="bi bi-pencil me-1"></i> Редактировать
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Modal для подтверждения сброса всех настроек -->
+        <div class="modal fade" id="resetAllModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header bg-danger text-white">
+                        <h5 class="modal-title">
+                            <i class="bi bi-exclamation-triangle me-2"></i>
+                            Подтверждение сброса
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p><strong>Вы уверены, что хотите сбросить ВСЕ модификации?</strong></p>
+                        <p>Это действие нельзя отменить. Все модификации будут удалены.</p>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                            <i class="bi bi-x-circle me-1"></i> Отмена
+                        </button>
+                        <button type="button" class="btn btn-danger" id="confirmResetAll">
+                            <i class="bi bi-trash me-1"></i> Сбросить все
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Modal для проверки селектора -->
+        <div class="modal fade" id="testSelectorModal" tabindex="-1">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header bg-primary text-white">
+                        <h5 class="modal-title">
+                            <i class="bi bi-search me-2"></i>
+                            Тестирование селектора
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="testSelectorLoading" class="text-center py-3">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Загрузка...</span>
+                            </div>
+                            <p class="mt-2">Открываем страницу и проверяем селектор...</p>
                         </div>
                         
-                        <div class="alert alert-danger mb-3 d-none" id="testSelectorError">
-                            <i class="bi bi-exclamation-triangle-fill me-2"></i>
-                            <span id="testSelectorErrorText">Элементы не найдены.</span>
-                        </div>
-                        
-                        <div id="testSelectorDetails" class="d-none">
-                            <h6 class="mt-3">Результаты проверки:</h6>
-                            <div class="card">
-                                <div class="card-body">
-                                    <div class="row">
-                                        <div class="col-md-4">
-                                            <strong>Проверяемый URL:</strong>
-                                        </div>
-                                        <div class="col-md-8 text-break">
-                                            <span id="testSelectorUrl"></span>
-                                        </div>
-                                    </div>
-                                    <hr>
-                                    <div class="row">
-                                        <div class="col-md-4">
-                                            <strong>Селектор:</strong>
-                                        </div>
-                                        <div class="col-md-8">
-                                            <code id="testSelectorQuery"></code>
-                                        </div>
-                                    </div>
-                                    <hr>
-                                    <div class="row">
-                                        <div class="col-md-4">
-                                            <strong>Найденные элементы:</strong>
-                                        </div>
-                                        <div class="col-md-8">
-                                            <span id="testSelectorFoundCount" class="badge bg-primary"></span>
-                                        </div>
-                                    </div>
-                                    <hr>
-                                    <div class="row">
-                                        <div class="col-md-4">
-                                            <strong>Текущее содержимое:</strong>
-                                        </div>
-                                        <div class="col-md-8">
-                                            <div id="testSelectorContent" class="border p-2 bg-light"></div>
-                                        </div>
-                                    </div>
-                                    <hr>
-                                    <div id="alternateSelectorSection" class="d-none">
+                        <div id="testSelectorResult" class="d-none">
+                            <div class="alert alert-success mb-3 d-none" id="testSelectorSuccess">
+                                <i class="bi bi-check-circle-fill me-2"></i>
+                                <span id="testSelectorSuccessText">Найдены элементы, соответствующие селектору!</span>
+                            </div>
+                            
+                            <div class="alert alert-danger mb-3 d-none" id="testSelectorError">
+                                <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                                <span id="testSelectorErrorText">Элементы не найдены.</span>
+                            </div>
+                            
+                            <div id="testSelectorDetails" class="d-none">
+                                <h6 class="mt-3">Результаты проверки:</h6>
+                                <div class="card">
+                                    <div class="card-body">
                                         <div class="row">
                                             <div class="col-md-4">
-                                                <strong>Альтернативный селектор:</strong>
+                                                <strong>Проверяемый URL:</strong>
+                                            </div>
+                                            <div class="col-md-8 text-break">
+                                                <span id="testSelectorUrl"></span>
+                                            </div>
+                                        </div>
+                                        <hr>
+                                        <div class="row">
+                                            <div class="col-md-4">
+                                                <strong>Селектор:</strong>
                                             </div>
                                             <div class="col-md-8">
-                                                <code id="testAlternateSelector"></code>
-                                                <button class="btn btn-sm btn-outline-primary ms-2" id="useAlternateSelector">
-                                                    <i class="bi bi-check-circle me-1"></i> Использовать
-                                                </button>
+                                                <code id="testSelectorQuery"></code>
+                                            </div>
+                                        </div>
+                                        <hr>
+                                        <div class="row">
+                                            <div class="col-md-4">
+                                                <strong>Найденные элементы:</strong>
+                                            </div>
+                                            <div class="col-md-8">
+                                                <span id="testSelectorFoundCount" class="badge bg-primary"></span>
+                                            </div>
+                                        </div>
+                                        <hr>
+                                        <div class="row">
+                                            <div class="col-md-4">
+                                                <strong>Текущее содержимое:</strong>
+                                            </div>
+                                            <div class="col-md-8">
+                                                <div id="testSelectorContent" class="border p-2 bg-light"></div>
+                                            </div>
+                                        </div>
+                                        <hr>
+                                        <div id="alternateSelectorSection" class="d-none">
+                                            <div class="row">
+                                                <div class="col-md-4">
+                                                    <strong>Альтернативный селектор:</strong>
+                                                </div>
+                                                <div class="col-md-8">
+                                                    <code id="testAlternateSelector"></code>
+                                                    <button class="btn btn-sm btn-outline-primary ms-2" id="useAlternateSelector">
+                                                        <i class="bi bi-check-circle me-1"></i> Использовать
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -1947,55 +1817,54 @@ const adminPanelHtml = `<!DOCTYPE html>
                             </div>
                         </div>
                     </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
-                        <i class="bi bi-x-circle me-1"></i> Закрыть
-                    </button>
-                    <button type="button" class="btn btn-primary" id="applySelectorTestBtn">
-                        <i class="bi bi-check2 me-1"></i> Применить
-                    </button>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                            <i class="bi bi-x-circle me-1"></i> Закрыть
+                        </button>
+                        <button type="button" class="btn btn-primary" id="applySelectorTestBtn">
+                            <i class="bi bi-check2 me-1"></i> Применить
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
-    </div>
-    
-    <!-- Система уведомлений -->
-    <div class="toast-container"></div>
-    
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        // Глобальные переменные
-        let deleteUrl = '';
-        let customPagesList = [];
-        let testWindow = null;
         
-        // DOM элементы
-        const form = document.getElementById('customPageForm');
-        const pageUrlInput = document.getElementById('pageUrl');
-        const cssSelectorInput = document.getElementById('cssSelector');
-        const customValueInput = document.getElementById('customValue');
-        const customPagesListEl = document.getElementById('customPagesList');
-        const deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
-        const detailsModal = new bootstrap.Modal(document.getElementById('detailsModal'));
-        const resetAllModal = new bootstrap.Modal(document.getElementById('resetAllModal'));
-        const testSelectorModal = new bootstrap.Modal(document.getElementById('testSelectorModal'));
-        const confirmDeleteBtn = document.getElementById('confirmDelete');
-        const confirmResetAllBtn = document.getElementById('confirmResetAll');
-        const resetAllBtn = document.getElementById('resetAllBtn');
-        const testButton = document.getElementById('testButton');
-        const clearFormBtn = document.getElementById('clearFormBtn');
-        const searchListInput = document.getElementById('searchList');
-        const pageUrlFromTabBtn = document.getElementById('pageUrlFromTab');
-        const testOpenUrlBtn = document.getElementById('testOpenUrlBtn');
-        const applyChangesBtn = document.getElementById('applyChangesBtn');
-        const checkStatusBtn = document.getElementById('checkStatusBtn');
-        const statusAlert = document.getElementById('statusAlert');
-        const refreshListBtn = document.getElementById('refreshListBtn');
-        const analyzeSelectorBtn = document.getElementById('analyzeSelectorBtn');
-        const selectorInfo = document.getElementById('selectorInfo');
-        const flexibleSelectorOutput = document.getElementById('flexibleSelectorOutput');
-        const clickableSelectors = document.querySelectorAll('.clickable-selector');
+        <!-- Система уведомлений -->
+        <div class="toast-container"></div>
+        
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+        <script>
+            // Глобальные переменные
+            let deleteUrl = '';
+            let customPagesList = [];
+            let testWindow = null;
+            
+            // DOM элементы
+            const form = document.getElementById('customPageForm');
+            const pageUrlInput = document.getElementById('pageUrl');
+            const cssSelectorInput = document.getElementById('cssSelector');
+            const customValueInput = document.getElementById('customValue');
+            const customPagesListEl = document.getElementById('customPagesList');
+            const deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
+            const detailsModal = new bootstrap.Modal(document.getElementById('detailsModal'));
+            const resetAllModal = new bootstrap.Modal(document.getElementById('resetAllModal'));
+            const testSelectorModal = new bootstrap.Modal(document.getElementById('testSelectorModal'));
+            const confirmDeleteBtn = document.getElementById('confirmDelete');
+            const confirmResetAllBtn = document.getElementById('confirmResetAll');
+            const resetAllBtn = document.getElementById('resetAllBtn');
+            const testButton = document.getElementById('testButton');
+            const clearFormBtn = document.getElementById('clearFormBtn');
+            const searchListInput = document.getElementById('searchList');
+            const pageUrlFromTabBtn = document.getElementById('pageUrlFromTab');
+            const testOpenUrlBtn = document.getElementById('testOpenUrlBtn');
+            const applyChangesBtn = document.getElementById('applyChangesBtn');
+            const checkStatusBtn = document.getElementById('checkStatusBtn');
+            const statusAlert = document.getElementById('statusAlert');
+            const refreshListBtn = document.getElementById('refreshListBtn');
+            const analyzeSelectorBtn = document.getElementById('analyzeSelectorBtn');
+            const selectorInfo = document.getElementById('selectorInfo');
+            const flexibleSelectorOutput = document.getElementById('flexibleSelectorOutput');
+            const clickableSelectors = document.querySelectorAll('.clickable-selector');
             
             // Функция для показа уведомлений
             function showToast(message, type = 'success') {
@@ -2862,6 +2731,7 @@ const adminPanelHtml = `<!DOCTYPE html>
     `;
     
     res.send(html);
+});
 
 // ИСПРАВЛЕНО: Улучшенная обработка GraphQL запросов с повторными попытками
 app.post('/api/graphql', async (req, res) => {
