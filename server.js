@@ -474,37 +474,74 @@ function modifyUrls(content, baseUrl, contentType = '') {
                     })
                     .then(customization => {
                         if (customization && customization.selector) {
-                            // Функция для применения изменений через интервал
-                            const applyChanges = () => {
-                                try {
+                            // НОВОЕ: Добавляем CSS, чтобы скрыть целевой элемент до модификации
+                            const styleId = 'temp-hide-elements';
+                            if (!document.getElementById(styleId)) {
+                                const style = document.createElement('style');
+                                style.id = styleId;
+                                style.textContent = `${customization.selector} { opacity: 0 !important; transition: opacity 0.3s; }`;
+                                document.head.appendChild(style);
+                            }
+                            
+                            // Функция для применения изменений с использованием MutationObserver
+                            const setupModificationObserver = () => {
+                                // Проверяем существующие элементы
+                                const checkExisting = () => {
                                     const elements = document.querySelectorAll(customization.selector);
                                     if (elements && elements.length > 0) {
                                         console.log('Found', elements.length, 'elements matching selector');
                                         
                                         elements.forEach((el, index) => {
-                                            console.log('Modifying element', index + 1);
-                                            el.innerHTML = customization.value;
-                                            el.setAttribute('data-modified', 'true');
+                                            if (!el.hasAttribute('data-modified')) {
+                                                console.log('Modifying element', index + 1);
+                                                el.innerHTML = customization.value;
+                                                el.setAttribute('data-modified', 'true');
+                                            }
                                         });
                                         
-                                        // Если нашли хотя бы один элемент, останавливаем интервал
-                                        clearInterval(checkInterval);
+                                        // Удаляем временный CSS-стиль для отображения модифицированных элементов
+                                        setTimeout(() => {
+                                            const tempStyle = document.getElementById(styleId);
+                                            if (tempStyle) {
+                                                tempStyle.textContent = `${customization.selector} { opacity: 1 !important; }`;
+                                                setTimeout(() => tempStyle.remove(), 300);
+                                            }
+                                        }, 50);
+                                        
+                                        return true;
                                     }
-                                } catch (error) {
-                                    console.error('Error applying custom modifications:', error);
-                                }
+                                    return false;
+                                };
+                                
+                                // Если элементы уже существуют, модифицируем их
+                                if (checkExisting()) return;
+                                
+                                // Создаем MutationObserver для отслеживания появления элементов
+                                const observer = new MutationObserver((mutations) => {
+                                    if (checkExisting()) {
+                                        observer.disconnect();
+                                    }
+                                });
+                                
+                                // Начинаем наблюдение за всем документом
+                                observer.observe(document.documentElement, {
+                                    childList: true,
+                                    subtree: true
+                                });
+                                
+                                // Устанавливаем таймаут для прекращения наблюдения через 10 секунд
+                                setTimeout(() => {
+                                    observer.disconnect();
+                                    
+                                    // Проверяем еще раз перед отключением и удаляем скрывающий стиль
+                                    checkExisting();
+                                    const tempStyle = document.getElementById(styleId);
+                                    if (tempStyle) tempStyle.remove();
+                                }, 10000);
                             };
                             
-                            // Пытаемся применить изменения сразу
-                            applyChanges();
-                            
-                            // И еще несколько раз через интервал для страниц с динамической загрузкой
-                            const checkInterval = setInterval(applyChanges, 1000);
-                            
-                            // Остановим интервал через 10 секунд в любом случае
-                            setTimeout(() => {
-                                clearInterval(checkInterval);
-                            }, 10000);
+                            // Запускаем наблюдатель немедленно
+                            setupModificationObserver();
                         }
                     })
                     .catch(error => {
@@ -512,11 +549,12 @@ function modifyUrls(content, baseUrl, contentType = '') {
                     });
             }
             
-            // Запускаем проверку кастомных модификаций при загрузке страницы
-            document.addEventListener('DOMContentLoaded', applyCustomModifications);
+            // НОВОЕ: Запускаем проверку максимально рано, до загрузки DOM
+            applyCustomModifications();
             
-            // Также проверяем через 1 секунду после загрузки для динамических страниц
-            setTimeout(applyCustomModifications, 1000);
+            // Также запускаем при загрузке DOM и после загрузки страницы
+            document.addEventListener('DOMContentLoaded', applyCustomModifications);
+            window.addEventListener('load', applyCustomModifications);
             
             console.log('🔧 Proxy initialized successfully with enhanced error handling and custom modifications support');
         })();
@@ -1131,6 +1169,9 @@ app.get('/admin-api/check-custom-page', (req, res) => {
         return res.status(400).json({ error: 'URL parameter is required' });
     }
     
+    // ОПТИМИЗАЦИЯ: Устанавливаем кэширующие заголовки для улучшения производительности
+    res.set('Cache-Control', 'public, max-age=5'); // Кэшировать на 5 секунд
+    
     // Проверяем, есть ли для этого URL настройки
     const hasCustomizations = customPages.has(urlToCheck);
     
@@ -1144,6 +1185,9 @@ app.get('/admin-api/get-custom-page', (req, res) => {
     if (!urlToCheck) {
         return res.status(400).json({ error: 'URL parameter is required' });
     }
+    
+    // ОПТИМИЗАЦИЯ: Устанавливаем кэширующие заголовки
+    res.set('Cache-Control', 'public, max-age=30'); // Кэшировать на 30 секунд
     
     // Получаем настройки для URL
     const customization = customPages.get(urlToCheck);
