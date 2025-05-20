@@ -1,4 +1,13 @@
-const express = require('express');
+// Simple test endpoint to check if the server is responding correctly
+app.get('/admin-test', (req, res) => {
+    res.json({ status: 'ok', message: 'Admin API is working' });
+});
+
+// Create a text-only admin panel as fallback
+app.get('/admin-plain', (req, res) => {
+    res.setHeader('Content-Type', 'text/plain');
+    res.send('Admin panel plain text version');
+});const express = require('express');
 const axios = require('axios');
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
