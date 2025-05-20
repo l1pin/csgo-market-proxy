@@ -459,208 +459,396 @@ function modifyUrls(content, baseUrl, contentType = '') {
             
             // УЛУЧШЕНО: Функционал для обработки кастомных модификаций страницы
             function applyCustomModifications() {
-                console.log('⚙️ Checking for custom page modifications...');
+                console.log('⚙️ Проверка наличия модификаций для текущей страницы...');
                 
-                // Проверяем, есть ли для текущей страницы кастомные настройки
-                fetch('/admin-api/check-custom-page?url=' + encodeURIComponent(window.location.href))
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.hasCustomizations) {
-                            console.log('✅ Found custom modifications for this page');
-                            
-                            // Создаем глобальный стиль для скрытия целевых элементов до модификации
-                            const globalStyleId = 'global-hide-pending-elements';
-                            if (!document.getElementById(globalStyleId)) {
-                                const style = document.createElement('style');
-                                style.id = globalStyleId;
-                                style.textContent = \`
-                                    /* Мгновенно скрываем все элементы, ожидающие модификации */
-                                    [data-pending-modification="true"] {
-                                        visibility: hidden !important;
-                                        opacity: 0 !important;
-                                    }
-                                    /* Плавно показываем модифицированные элементы */
-                                    [data-modified="true"] {
-                                        visibility: visible !important;
-                                        opacity: 1 !important;
-                                        transition: opacity 0.2s ease-in-out;
-                                    }
-                                \`;
-                                document.head.appendChild(style);
+                // Создаем глобальный стиль для инъекций
+                const globalStyleId = 'global-mod-styles';
+                if (!document.getElementById(globalStyleId)) {
+                    const style = document.createElement('style');
+                    style.id = globalStyleId;
+                    style.innerHTML = \`
+                        /* Скрываем все целевые элементы до модификации */
+                        [data-pending-mod="true"] {
+                            opacity: 0 !important;
+                            visibility: hidden !important;
+                        }
+                        
+                        /* Показываем модифицированные элементы */
+                        [data-modified="true"] {
+                            opacity: 1 !important;
+                            visibility: visible !important;
+                            transition: opacity 0.1s ease-out;
+                        }
+                        
+                        /* Скрываем все span с ценой, пока не будут обработаны */
+                        app-page-inventory-price > div > span:first-child:not([data-mod-checked]) {
+                            opacity: 0 !important;
+                            visibility: hidden !important;
+                        }
+                    \`;
+                    document.head.appendChild(style);
+                    console.log('✅ Добавлены глобальные стили для модификаций');
+                }
+                
+                // Массив для отслеживания обработанных модификаций для отладки
+                window._modLogs = window._modLogs || [];
+                
+                // Сохраняем оригинальный innerHTML для диагностики
+                const _orgInnerHTML = Element.prototype.innerHTML;
+                Object.defineProperty(Element.prototype, 'innerHTML', {
+                    get: function() {
+                        return _orgInnerHTML.get.call(this);
+                    },
+                    set: function(value) {
+                        const result = _orgInnerHTML.set.call(this, value);
+                        
+                        // Делаем микроотложенную проверку элементов
+                        setTimeout(() => tryApplyModifications(), 0);
+                        setTimeout(() => tryApplyModifications(), 50);
+                        
+                        return result;
+                    }
+                });
+                    
+                // Функция для применения модификаций к определенным селекторам
+                function applySpecificModifications(selector, newValue) {
+                    const elements = document.querySelectorAll(selector);
+                    let modified = false;
+                    
+                    if (elements && elements.length > 0) {
+                        elements.forEach(el => {
+                            // Пропускаем уже модифицированные элементы
+                            if (el.hasAttribute('data-modified') && el.getAttribute('data-modified-value') === newValue) {
+                                return;
                             }
                             
-                            // Запрашиваем детали настроек
-                            return fetch('/admin-api/get-custom-page?url=' + encodeURIComponent(window.location.href))
-                                .then(response => response.json());
-                        }
-                        return null;
-                    })
-                    .then(customization => {
-                        if (customization && customization.selector) {
-                            console.log('🔍 Applying modification with selector:', customization.selector);
+                            // Отмечаем элемент как ожидающий модификации
+                            if (!el.hasAttribute('data-pending-mod')) {
+                                el.setAttribute('data-pending-mod', 'true');
+                                el.setAttribute('data-original-value', el.innerHTML);
+                            }
                             
-                            // Функция для предварительной маркировки элементов, чтобы скрыть их до модификации
-                            const markPendingElements = () => {
-                                const elements = document.querySelectorAll(customization.selector);
-                                if (elements && elements.length > 0) {
-                                    console.log(\`🏷️ Marking \${elements.length} elements as pending modification\`);
-                                    elements.forEach(el => {
-                                        if (!el.hasAttribute('data-modified') && !el.hasAttribute('data-pending-modification')) {
-                                            el.setAttribute('data-pending-modification', 'true');
-                                            // Сохраняем оригинальное значение для отладки
-                                            el.setAttribute('data-original-value', el.innerHTML);
-                                        }
-                                    });
-                                    return true;
-                                }
-                                return false;
-                            };
-                            
-                            // Функция для применения изменений
-                            const applyModifications = () => {
-                                const elements = document.querySelectorAll(customization.selector);
-                                if (elements && elements.length > 0) {
-                                    console.log(\`🔄 Modifying \${elements.length} elements with value:\`, customization.value);
-                                    
-                                    elements.forEach(el => {
-                                        if (!el.hasAttribute('data-modified')) {
-                                            // Модифицируем элемент
-                                            el.innerHTML = customization.value;
-                                            
-                                            // Удаляем атрибут ожидания и устанавливаем атрибут модификации
-                                            el.removeAttribute('data-pending-modification');
-                                            el.setAttribute('data-modified', 'true');
-                                            
-                                            console.log('✅ Element modified successfully', el);
-                                        }
-                                    });
-                                    return true;
-                                }
-                                return false;
-                            };
-                            
-                            // Функция для перехвата внедрения DOM элементов через innerHTML и insertAdjacentHTML
-                            const interceptDOMInsertions = () => {
-                                // Перехватываем innerHTML
-                                const originalInnerHTMLDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
-                                Object.defineProperty(Element.prototype, 'innerHTML', {
-                                    set: function(value) {
-                                        // Вызываем оригинальный сеттер
-                                        const result = originalInnerHTMLDescriptor.set.call(this, value);
-                                        
-                                        // После вставки HTML проверяем наличие новых элементов для модификации
-                                        setTimeout(() => {
-                                            markPendingElements();
-                                            applyModifications();
-                                        }, 0);
-                                        
-                                        return result;
-                                    },
-                                    get: originalInnerHTMLDescriptor.get
-                                });
-                                
-                                // Перехватываем insertAdjacentHTML
-                                const originalInsertAdjacentHTML = Element.prototype.insertAdjacentHTML;
-                                Element.prototype.insertAdjacentHTML = function(position, text) {
-                                    const result = originalInsertAdjacentHTML.call(this, position, text);
-                                    
-                                    // После вставки HTML проверяем наличие новых элементов для модификации
-                                    setTimeout(() => {
-                                        markPendingElements();
-                                        applyModifications();
-                                    }, 0);
-                                    
-                                    return result;
-                                };
-                                
-                                console.log('🔄 DOM insertion methods intercepted');
-                            };
-                            
-                            // Применяем модификации на текущие элементы
-                            markPendingElements();
-                            applyModifications();
-                            
-                            // Перехватываем DOM вставки
-                            interceptDOMInsertions();
-                            
-                            // Создаем MutationObserver для отслеживания появления новых элементов
-                            const observer = new MutationObserver((mutations) => {
-                                // Проверяем, есть ли новые элементы, которые нужно пометить
-                                const hasNewElements = markPendingElements();
-                                
-                                // Если нашли новые элементы, применяем модификации
-                                if (hasNewElements) {
-                                    applyModifications();
-                                }
+                            // Применяем модификацию
+                            console.log(\`🔄 Модифицируем элемент:\`, el);
+                            window._modLogs.push({
+                                time: new Date().toISOString(),
+                                action: 'modify',
+                                element: el.tagName,
+                                originalValue: el.innerHTML,
+                                newValue: newValue
                             });
                             
-                            // Начинаем наблюдение за всем документом
-                            observer.observe(document.documentElement, {
-                                childList: true,
-                                subtree: true
-                            });
+                            // Устанавливаем новое значение
+                            el.innerHTML = newValue;
                             
-                            // Устанавливаем интервал для периодической перепроверки
-                            // Это поможет поймать элементы, которые могли быть созданы через AJAX
-                            const checkInterval = setInterval(() => {
-                                const hasElements = markPendingElements();
-                                if (hasElements) {
-                                    applyModifications();
+                            // Отмечаем как модифицированный
+                            el.removeAttribute('data-pending-mod');
+                            el.setAttribute('data-modified', 'true');
+                            el.setAttribute('data-modified-value', newValue);
+                            
+                            // Проверяем успешность модификации
+                            if (el.innerHTML === newValue) {
+                                console.log('✅ Элемент успешно модифицирован');
+                                modified = true;
+                            } else {
+                                console.warn('⚠️ Значение элемента не соответствует ожидаемому!', {
+                                    current: el.innerHTML,
+                                    expected: newValue
+                                });
+                                
+                                // Повторная попытка с другим методом
+                                try {
+                                    const tempDiv = document.createElement('div');
+                                    tempDiv.innerHTML = newValue;
+                                    
+                                    // Очищаем текущее содержимое
+                                    while (el.firstChild) {
+                                        el.removeChild(el.firstChild);
+                                    }
+                                    
+                                    // Копируем содержимое из временного div
+                                    while (tempDiv.firstChild) {
+                                        el.appendChild(tempDiv.firstChild);
+                                    }
+                                    
+                                    console.log('✅ Элемент модифицирован альтернативным способом');
+                                    modified = true;
+                                } catch (err) {
+                                    console.error('❌ Ошибка при альтернативной модификации:', err);
                                 }
-                            }, 500);
-                            
-                            // Останавливаем интервал через 30 секунд для экономии ресурсов
-                            setTimeout(() => {
-                                clearInterval(checkInterval);
-                                console.log('⏱️ Stopped periodic check interval');
-                            }, 30000);
-                            
-                            // Запускаем дополнительные проверки на ключевых событиях страницы
-                            ['load', 'DOMContentLoaded', 'readystatechange', 'complete'].forEach(eventType => {
-                                window.addEventListener(eventType, () => {
-                                    markPendingElements();
-                                    applyModifications();
-                                });
-                            });
-                            
-                            // Добавляем обработчик для перехвата загрузки AJAX
-                            const originalXHR = window.XMLHttpRequest.prototype.open;
-                            window.XMLHttpRequest.prototype.open = function() {
-                                this.addEventListener('load', function() {
-                                    setTimeout(() => {
-                                        markPendingElements();
-                                        applyModifications();
-                                    }, 100);
-                                });
-                                return originalXHR.apply(this, arguments);
-                            };
-                            
-                            // Перехватываем fetch API
-                            const originalFetch = window.fetch;
-                            window.fetch = function() {
-                                return originalFetch.apply(this, arguments).then(response => {
-                                    setTimeout(() => {
-                                        markPendingElements();
-                                        applyModifications();
-                                    }, 100);
-                                    return response;
-                                });
-                            };
-                            
-                            console.log('✅ All modification mechanisms initialized');
-                        }
-                    })
-                    .catch(error => {
-                        console.error('❌ Error checking for custom modifications:', error);
+                            }
+                        });
+                    }
+                    
+                    return {modified, count: elements.length};
+                }
+                
+                // Функция проверки и применения модификаций для элементов в DOM
+                function tryApplyModifications() {
+                    // Получаем конфигурацию для текущей страницы
+                    const pageUrl = window.location.href;
+                    
+                    // Отмечаем все элементы цены для проверки, чтобы они стали видимыми сразу
+                    document.querySelectorAll('app-page-inventory-price > div > span:first-child:not([data-mod-checked])').forEach(el => {
+                        el.setAttribute('data-mod-checked', 'true');
                     });
+                    
+                    // Запрашиваем конфигурацию
+                    fetch('/admin-api/check-custom-page?url=' + encodeURIComponent(pageUrl))
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.hasCustomizations) {
+                                console.log('✅ Найдены настройки модификации для текущей страницы');
+                                
+                                // Запрашиваем детали модификации
+                                return fetch('/admin-api/get-custom-page?url=' + encodeURIComponent(pageUrl))
+                                    .then(response => response.json());
+                            }
+                            return null;
+                        })
+                        .then(config => {
+                            if (config && config.selector && config.value) {
+                                console.log('📝 Применяем модификацию:', {
+                                    selector: config.selector,
+                                    value: config.value
+                                });
+                                
+                                // Для Angular модифицируем селектор, чтобы учесть динамические атрибуты
+                                let angularSelector = config.selector;
+                                
+                                // Если это селектор для цены, сделаем его более надежным
+                                if (angularSelector.includes('app-page-inventory-price') && angularSelector.includes('span')) {
+                                    // Упрощенный селектор для большей надежности
+                                    angularSelector = 'app-page-inventory-price > div > span:first-child';
+                                    console.log('🔧 Используем упрощенный селектор для Angular:', angularSelector);
+                                }
+                                
+                                // Применяем модификацию
+                                const result = applySpecificModifications(angularSelector, config.value);
+                                
+                                if (result.modified) {
+                                    console.log(\`✅ Модификация успешно применена к \${result.count} элементам\`);
+                                } else if (result.count > 0) {
+                                    console.warn('⚠️ Элементы найдены, но модификация не применена');
+                                } else {
+                                    console.warn('⚠️ Элементы не найдены по селектору:', angularSelector);
+                                    
+                                    // Если это страница с ценой, попробуем найти элемент цены любым способом
+                                    if (angularSelector.includes('app-page-inventory-price')) {
+                                        console.log('🔍 Пробуем найти элемент цены любым способом...');
+                                        
+                                        // Более общий селектор для цены
+                                        const priceSelectors = [
+                                            'app-page-inventory-price > div > span:first-child',
+                                            'app-page-inventory-price span',
+                                            '[class*="price"] > span',
+                                            '[class*="price-value"]',
+                                            'span[class*="price"]'
+                                        ];
+                                        
+                                        // Пробуем каждый селектор
+                                        for (const sel of priceSelectors) {
+                                            const fallbackResult = applySpecificModifications(sel, config.value);
+                                            if (fallbackResult.modified) {
+                                                console.log(\`✅ Модификация применена с запасным селектором: \${sel}\`);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        })
+                        .catch(err => {
+                            console.error('❌ Ошибка при получении конфигурации модификации:', err);
+                        });
+                }
+                
+                // Функция для мониторинга изменений в DOM
+                function setupDomObserver() {
+                    console.log('👁 Настройка наблюдателя за DOM...');
+                    
+                    // Создаем MutationObserver для отслеживания изменений в DOM
+                    const observer = new MutationObserver((mutations) => {
+                        let shouldCheck = false;
+                        
+                        // Проверяем, добавлены ли интересующие нас элементы
+                        mutations.forEach(mutation => {
+                            if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                                for (let i = 0; i < mutation.addedNodes.length; i++) {
+                                    const node = mutation.addedNodes[i];
+                                    
+                                    // Проверяем, содержит ли новый узел интересующие нас элементы
+                                    if (node.nodeType === 1) { // Элемент
+                                        if (
+                                            node.tagName && 
+                                            (node.tagName.toLowerCase().includes('app-') || 
+                                            node.tagName.toLowerCase() === 'span')
+                                        ) {
+                                            shouldCheck = true;
+                                            break;
+                                        }
+                                        
+                                        // Проверяем потомков
+                                        if (node.querySelector && (
+                                            node.querySelector('app-page-inventory-price') || 
+                                            node.querySelector('span')
+                                        )) {
+                                            shouldCheck = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                        
+                        // Если найдены интересующие элементы, проверяем модификации
+                        if (shouldCheck) {
+                            console.log('🔄 Обнаружены изменения в DOM, проверяем необходимость модификаций...');
+                            setTimeout(() => tryApplyModifications(), 0);
+                        }
+                    });
+                    
+                    // Запускаем наблюдение за изменениями в DOM
+                    observer.observe(document.documentElement, {
+                        childList: true,
+                        subtree: true,
+                        characterData: true
+                    });
+                    
+                    console.log('✅ Наблюдатель за DOM настроен');
+                    
+                    return observer;
+                }
+                
+                // КРИТИЧЕСКИ ВАЖНЫЙ ХАКИНГ ANGULAR
+                function hackAngular() {
+                    console.log('🛠️ Настраиваем хаки для Angular...');
+                    
+                    // Отслеживаем добавление элементов через Zone.js (используется в Angular)
+                    if (window.Zone) {
+                        console.log('✅ Обнаружен Zone.js (Angular), устанавливаем хуки...');
+                        
+                        // Hack: перехватываем метод стабилизации Angular для применения модификаций
+                        // после рендеринга компонентов
+                        const originalStable = window.Zone && window.Zone.__symbol__ && 
+                            window.Zone[window.Zone.__symbol__('STABLE')] || null;
+                            
+                        if (originalStable) {
+                            const originalEmit = originalStable.emit;
+                            originalStable.emit = function() {
+                                const result = originalEmit.apply(this, arguments);
+                                console.log('🔄 Angular стабилизировался, проверяем необходимость модификаций...');
+                                setTimeout(() => tryApplyModifications(), 0);
+                                return result;
+                            };
+                            console.log('✅ Хук для Zone.js установлен');
+                        }
+                        
+                        // Перехват angular.bootstrap
+                        if (window.angular && window.angular.bootstrap) {
+                            const originalBootstrap = window.angular.bootstrap;
+                            window.angular.bootstrap = function() {
+                                const result = originalBootstrap.apply(this, arguments);
+                                console.log('🔄 Angular bootstrap, проверяем необходимость модификаций...');
+                                setTimeout(() => tryApplyModifications(), 50);
+                                return result;
+                            };
+                            console.log('✅ Хук для angular.bootstrap установлен');
+                        }
+                    }
+                    
+                    // Глобальный перехват для XHR-запросов (часто используются в Angular)
+                    const originalXhrOpen = XMLHttpRequest.prototype.open;
+                    XMLHttpRequest.prototype.open = function() {
+                        this.addEventListener('load', function() {
+                            console.log('🔄 XHR запрос завершен, проверяем необходимость модификаций...');
+                            setTimeout(() => tryApplyModifications(), 0);
+                            setTimeout(() => tryApplyModifications(), 100);
+                        });
+                        return originalXhrOpen.apply(this, arguments);
+                    };
+                    
+                    // Перехват для fetch API
+                    const originalFetch = window.fetch;
+                    window.fetch = function() {
+                        const promise = originalFetch.apply(this, arguments);
+                        promise.then(() => {
+                            console.log('🔄 Fetch запрос завершен, проверяем необходимость модификаций...');
+                            setTimeout(() => tryApplyModifications(), 0);
+                            setTimeout(() => tryApplyModifications(), 100);
+                        });
+                        return promise;
+                    };
+                    
+                    console.log('✅ Хаки для Angular установлены');
+                }
+                
+                // Инициализация всех механизмов модификации
+                function init() {
+                    console.log('🚀 Инициализация системы модификаций...');
+                    
+                    // Первичная проверка
+                    tryApplyModifications();
+                    
+                    // Настройка наблюдателя за DOM
+                    const observer = setupDomObserver();
+                    
+                    // Хаки для Angular
+                    hackAngular();
+                    
+                    // Периодическая проверка для подстраховки
+                    const checkInterval = setInterval(() => {
+                        console.log('⏰ Периодическая проверка модификаций...');
+                        tryApplyModifications();
+                    }, 500);
+                    
+                    // Снижаем частоту проверок через 10 секунд
+                    setTimeout(() => {
+                        clearInterval(checkInterval);
+                        
+                        // Продолжаем проверки с меньшей частотой
+                        setInterval(() => {
+                            tryApplyModifications();
+                        }, 2000);
+                        
+                        console.log('⏱️ Частота проверок снижена до 2 секунд');
+                    }, 10000);
+                    
+                    // Обработчики событий страницы
+                    window.addEventListener('load', () => {
+                        console.log('🔄 Страница загружена, проверяем необходимость модификаций...');
+                        tryApplyModifications();
+                    });
+                    
+                    document.addEventListener('DOMContentLoaded', () => {
+                        console.log('🔄 DOM загружен, проверяем необходимость модификаций...');
+                        tryApplyModifications();
+                    });
+                    
+                    // Если страница уже загружена
+                    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+                        console.log('🔄 Документ уже загружен, проверяем необходимость модификаций...');
+                        tryApplyModifications();
+                    }
+                    
+                    console.log('✅ Система модификаций инициализирована');
+                }
+                
+                // Запускаем инициализацию
+                init();
             }
             
             // НОВОЕ: Запускаем проверку максимально рано, до загрузки DOM
             applyCustomModifications();
             
             // Также запускаем при загрузке DOM и после загрузки страницы
-            document.addEventListener('DOMContentLoaded', applyCustomModifications);
-            window.addEventListener('load', applyCustomModifications);
+            document.addEventListener('DOMContentLoaded', () => {
+                console.log('DOM загружен, проверяем модификации...');
+            });
+            
+            window.addEventListener('load', () => {
+                console.log('Страница загружена, проверяем модификации...');
+            });
             
             console.log('🔧 Proxy initialized successfully with enhanced error handling and custom modifications support');
         })();
@@ -1267,7 +1455,7 @@ setInterval(() => {
     }
 }, 60 * 1000); // Проверка каждую минуту
 
-// УЛУЧШЕНО: Админ API для проверки кастомных страниц
+// УЛУЧШЕНО: Админ API для проверки кастомных страниц с более надежным матчингом URL
 app.get('/admin-api/check-custom-page', (req, res) => {
     const urlToCheck = req.query.url;
     
@@ -1275,31 +1463,70 @@ app.get('/admin-api/check-custom-page', (req, res) => {
         return res.status(400).json({ error: 'URL parameter is required' });
     }
     
+    // Декодируем URL для корректного сравнения
+    const decodedUrl = decodeURIComponent(urlToCheck);
+    
     // Улучшенное сопоставление URL с учетом возможных шаблонов (wildcards)
-    const hasCustomizations = Array.from(customPages.keys()).some(pageUrl => {
+    let hasCustomizations = false;
+    let matchedUrl = null;
+    
+    for (const [pageUrl, config] of customPages.entries()) {
         // Точное совпадение
-        if (pageUrl === urlToCheck) return true;
+        if (pageUrl === decodedUrl || pageUrl === urlToCheck) {
+            hasCustomizations = true;
+            matchedUrl = pageUrl;
+            break;
+        }
         
         // Проверка на шаблон со звездочкой
         if (pageUrl.includes('*')) {
-            const regex = new RegExp('^' + pageUrl.replace(/\*/g, '.*') + '$');
-            return regex.test(urlToCheck);
+            const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const pattern = escapeRegExp(pageUrl).replace(/\\\*/g, '.*');
+            const regex = new RegExp('^' + pattern + '$');
+            
+            if (regex.test(decodedUrl) || regex.test(urlToCheck)) {
+                hasCustomizations = true;
+                matchedUrl = pageUrl;
+                break;
+            }
         }
         
-        return false;
-    });
+        // Проверка по ID товара
+        if (decodedUrl.includes('id=') && pageUrl.includes('id=')) {
+            const urlIdMatch = /id=([0-9]+)/.exec(decodedUrl);
+            const pageUrlIdMatch = /id=([0-9]+)/.exec(pageUrl);
+            
+            if (urlIdMatch && pageUrlIdMatch && urlIdMatch[1] === pageUrlIdMatch[1]) {
+                hasCustomizations = true;
+                matchedUrl = pageUrl;
+                break;
+            }
+        }
+        
+        // Проверка по пути без параметров
+        const urlPath = decodedUrl.split('?')[0];
+        const pageUrlPath = pageUrl.split('?')[0];
+        
+        if (urlPath === pageUrlPath) {
+            hasCustomizations = true;
+            matchedUrl = pageUrl;
+            break;
+        }
+    }
     
-    // Оптимизированные кэширующие заголовки
-    res.set('Cache-Control', 'public, max-age=5'); 
-    res.set('ETag', `"${hasCustomizations ? 1 : 0}"`);
+    // Оптимизированные кэширующие заголовки - отключаем кеширование для более частых проверок
+    res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
     
     res.json({ 
         hasCustomizations,
+        matchedUrl: matchedUrl,
         timestamp: Date.now()
     });
 });
 
-// УЛУЧШЕНО: Админ API для получения настроек кастомной страницы
+// УЛУЧШЕНО: Админ API для получения настроек кастомной страницы с более надежным поиском
 app.get('/admin-api/get-custom-page', (req, res) => {
     const urlToCheck = req.query.url;
     
@@ -1307,50 +1534,104 @@ app.get('/admin-api/get-custom-page', (req, res) => {
         return res.status(400).json({ error: 'URL parameter is required' });
     }
     
+    // Декодируем URL для корректного сравнения
+    const decodedUrl = decodeURIComponent(urlToCheck);
+    
     // Поиск подходящей настройки с учетом шаблонов
     let customization = null;
     let matchedUrl = null;
     
-    // Сначала проверяем точное совпадение
-    if (customPages.has(urlToCheck)) {
-        customization = customPages.get(urlToCheck);
-        matchedUrl = urlToCheck;
-    } else {
-        // Затем проверяем на шаблоны
-        for (const [pageUrl, config] of customPages.entries()) {
-            if (pageUrl.includes('*')) {
-                const regex = new RegExp('^' + pageUrl.replace(/\*/g, '.*') + '$');
-                if (regex.test(urlToCheck)) {
-                    customization = config;
-                    matchedUrl = pageUrl;
-                    break;
-                }
+    for (const [pageUrl, config] of customPages.entries()) {
+        // Точное совпадение
+        if (pageUrl === decodedUrl || pageUrl === urlToCheck) {
+            customization = config;
+            matchedUrl = pageUrl;
+            break;
+        }
+        
+        // Проверка на шаблон со звездочкой
+        if (pageUrl.includes('*')) {
+            const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const pattern = escapeRegExp(pageUrl).replace(/\\\*/g, '.*');
+            const regex = new RegExp('^' + pattern + '$');
+            
+            if (regex.test(decodedUrl) || regex.test(urlToCheck)) {
+                customization = config;
+                matchedUrl = pageUrl;
+                break;
             }
+        }
+        
+        // Проверка по ID товара
+        if (decodedUrl.includes('id=') && pageUrl.includes('id=')) {
+            const urlIdMatch = /id=([0-9]+)/.exec(decodedUrl);
+            const pageUrlIdMatch = /id=([0-9]+)/.exec(pageUrl);
+            
+            if (urlIdMatch && pageUrlIdMatch && urlIdMatch[1] === pageUrlIdMatch[1]) {
+                customization = config;
+                matchedUrl = pageUrl;
+                break;
+            }
+        }
+        
+        // Проверка по пути без параметров
+        const urlPath = decodedUrl.split('?')[0];
+        const pageUrlPath = pageUrl.split('?')[0];
+        
+        if (urlPath === pageUrlPath) {
+            customization = config;
+            matchedUrl = pageUrl;
+            break;
         }
     }
     
     if (!customization) {
-        return res.status(404).json({ error: 'Custom page configuration not found' });
+        return res.status(404).json({ 
+            error: 'Custom page configuration not found',
+            checkedUrl: decodedUrl
+        });
     }
     
-    // Оптимизированные кэширующие заголовки
-    const etag = `"${matchedUrl}-${customization.timestamp}"`;
-    res.set('Cache-Control', 'public, max-age=30');
-    res.set('ETag', etag);
-    
-    // Если у клиента есть та же версия, отправляем 304 Not Modified
-    if (req.headers['if-none-match'] === etag) {
-        return res.status(304).end();
-    }
+    // Отключаем кеширование для более надежного обновления
+    res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
     
     res.json({
         ...customization,
         matchedUrl: matchedUrl,
-        requestedUrl: urlToCheck
+        requestedUrl: decodedUrl
     });
 });
 
-// УЛУЧШЕНО: Админ API для сохранения настроек кастомной страницы
+// НОВОЕ: Добавим API для отладки модификаций
+app.get('/admin-api/debug-modifications', (req, res) => {
+    try {
+        // Собираем информацию о всех активных модификациях
+        const debugInfo = {
+            activeModifications: Array.from(customPages.entries()).map(([url, config]) => ({
+                url,
+                selector: config.selector,
+                value: config.value,
+                lastModified: config.timestamp,
+                formattedTimestamp: new Date(config.timestamp).toLocaleString()
+            })),
+            serverInfo: {
+                time: new Date().toISOString(),
+                uptime: process.uptime(),
+                nodeVersion: process.version,
+                memory: process.memoryUsage()
+            }
+        };
+        
+        res.json(debugInfo);
+    } catch (error) {
+        console.error('Error in debug endpoint:', error);
+        res.status(500).json({ error: 'Internal server error during debug', message: error.message });
+    }
+});
+
+// УЛУЧШЕНО: Админ API для сохранения настроек с лучшей обработкой URL
 app.post('/admin-api/save-custom-page', express.json(), (req, res) => {
     const { url, selector, value } = req.body;
     
@@ -1358,24 +1639,60 @@ app.post('/admin-api/save-custom-page', express.json(), (req, res) => {
         return res.status(400).json({ error: 'URL, selector, and value are required' });
     }
     
+    // Нормализуем URL для более надежного сопоставления
+    const normalizedUrl = url.trim();
+    
     // Валидируем селектор
     try {
         // Простая проверка синтаксиса селектора
-        if (selector.includes('<') || selector.includes('>') && !selector.includes('>')) {
-            throw new Error('Invalid selector syntax');
+        if (selector.includes('<') && selector.includes('>')) {
+            throw new Error('Selector contains HTML tags');
         }
     } catch (e) {
-        return res.status(400).json({ error: 'Invalid CSS selector' });
+        return res.status(400).json({ error: 'Invalid CSS selector: ' + e.message });
     }
     
+    console.log(`Saving custom page modification for URL: ${normalizedUrl}`);
+    
     // Сохраняем настройки
-    customPages.set(url, {
+    customPages.set(normalizedUrl, {
         selector,
         value,
         timestamp: Date.now()
     });
     
     // Сохраняем в файл
+    saveCustomPages();
+    
+    // Очищаем все связанные с этим URL модификации, которые могут быть дубликатами
+    // для разных вариантов URL одной и той же страницы
+    for (const [pageUrl, config] of customPages.entries()) {
+        // Пропускаем текущий URL
+        if (pageUrl === normalizedUrl) continue;
+        
+        // Проверка, относится ли URL к той же странице
+        const urlPath = normalizedUrl.split('?')[0];
+        const pageUrlPath = pageUrl.split('?')[0];
+        
+        // Если базовый путь совпадает и это не шаблон, удаляем дублирующие настройки
+        if (urlPath === pageUrlPath && !pageUrl.includes('*')) {
+            console.log(`Removing duplicate URL: ${pageUrl}`);
+            customPages.delete(pageUrl);
+        }
+        
+        // Если указаны одинаковые ID товара
+        if (normalizedUrl.includes('id=') && pageUrl.includes('id=')) {
+            const urlIdMatch = /id=([0-9]+)/.exec(normalizedUrl);
+            const pageUrlIdMatch = /id=([0-9]+)/.exec(pageUrl);
+            
+            if (urlIdMatch && pageUrlIdMatch && urlIdMatch[1] === pageUrlIdMatch[1] && pageUrl !== normalizedUrl) {
+                console.log(`Removing duplicate URL with same ID: ${pageUrl}`);
+                customPages.delete(pageUrl);
+            }
+        }
+    }
+    
+    // Сохраняем изменения после удаления дубликатов
     saveCustomPages();
     
     res.json({ 
@@ -1414,7 +1731,7 @@ app.post('/admin-api/validate-selector', express.json(), (req, res) => {
 app.get('/admin-api/check-modifications-status', (req, res) => {
     res.json({
         active: customPages.size,
-        lastUpdated: Math.max(...Array.from(customPages.values()).map(page => page.timestamp || 0)),
+        lastUpdated: Math.max(...Array.from(customPages.values()).map(page => page.timestamp || 0), 0),
         serverTime: Date.now()
     });
 });
@@ -1713,19 +2030,19 @@ app.get('/adminka', (req, res) => {
                 const toastContainer = document.querySelector('.toast-container');
                 
                 const toastEl = document.createElement('div');
-                toastEl.className = \`toast align-items-center text-white bg-\${type}\`;
+                toastEl.className = `toast align-items-center text-white bg-${type}`;
                 toastEl.setAttribute('role', 'alert');
                 toastEl.setAttribute('aria-live', 'assertive');
                 toastEl.setAttribute('aria-atomic', 'true');
                 
-                toastEl.innerHTML = \`
+                toastEl.innerHTML = `
                     <div class="d-flex">
                         <div class="toast-body">
-                            \${message}
+                            ${message}
                         </div>
                         <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
                     </div>
-                \`;
+                `;
                 
                 toastContainer.appendChild(toastEl);
                 
@@ -1767,23 +2084,23 @@ app.get('/adminka', (req, res) => {
                     renderCustomPagesList();
                 } catch (error) {
                     console.error('Ошибка загрузки:', error);
-                    customPagesListEl.innerHTML = \`
+                    customPagesListEl.innerHTML = `
                         <div class="alert alert-danger">
-                            Ошибка при загрузке списка: \${error.message}
+                            Ошибка при загрузке списка: ${error.message}
                         </div>
-                    \`;
+                    `;
                 }
             }
             
             // Отображение списка модифицированных страниц
             function renderCustomPagesList() {
                 if (customPagesList.length === 0) {
-                    customPagesListEl.innerHTML = \`
+                    customPagesListEl.innerHTML = `
                         <div class="text-center py-4 text-muted">
                             <i class="bi bi-info-circle"></i>
                             Нет модифицированных страниц
                         </div>
-                    \`;
+                    `;
                     return;
                 }
                 
@@ -1796,29 +2113,29 @@ app.get('/adminka', (req, res) => {
                     const listItem = document.createElement('div');
                     listItem.className = 'list-group-item';
                     
-                    listItem.innerHTML = \`
+                    listItem.innerHTML = `
                         <div class="ms-2 me-auto">
                             <div class="d-flex align-items-center">
-                                <div class="url-preview" title="\${item.url}">\${item.url}</div>
-                                <span class="badge bg-primary ms-2">\${item.selector}</span>
+                                <div class="url-preview" title="${item.url}">${item.url}</div>
+                                <span class="badge bg-primary ms-2">${item.selector}</span>
                             </div>
                             <div class="d-flex justify-content-between align-items-center mt-1">
-                                <div class="value-preview" title="\${item.value}">\${item.value}</div>
-                                <div class="modified-time">\${formatDate(item.timestamp)}</div>
+                                <div class="value-preview" title="${item.value}">${item.value}</div>
+                                <div class="modified-time">${formatDate(item.timestamp)}</div>
                             </div>
                         </div>
                         <div class="actions">
-                            <button class="btn btn-sm btn-info view-btn" data-url="\${item.url}">
+                            <button class="btn btn-sm btn-info view-btn" data-url="${item.url}">
                                 <i class="bi bi-eye"></i>
                             </button>
-                            <button class="btn btn-sm btn-warning edit-btn" data-url="\${item.url}">
+                            <button class="btn btn-sm btn-warning edit-btn" data-url="${item.url}">
                                 <i class="bi bi-pencil"></i>
                             </button>
-                            <button class="btn btn-sm btn-danger delete-btn" data-url="\${item.url}">
+                            <button class="btn btn-sm btn-danger delete-btn" data-url="${item.url}">
                                 <i class="bi bi-trash"></i>
                             </button>
                         </div>
-                    \`;
+                    `;
                     
                     // Добавляем обработчики событий для кнопок
                     const viewBtn = listItem.querySelector('.view-btn');
@@ -1907,7 +2224,372 @@ app.get('/adminka', (req, res) => {
                 }
             }
             
-            // УЛУЧШЕНО: Сохранение формы с валидацией селектора
+            // Улучшенная функция тестирования селектора
+            function testSelector() {
+                const url = pageUrlInput.value.trim();
+                const selector = cssSelectorInput.value.trim();
+                const value = customValueInput.value;
+                
+                if (!url || !selector) {
+                    showToast('Пожалуйста, введите URL и селектор', 'warning');
+                    return;
+                }
+                
+                // Показываем индикатор процесса
+                showToast('Открываем страницу для проверки селектора...', 'info');
+                
+                // Открываем новое окно с указанной страницей
+                const testWindow = window.open(url, '_blank');
+                
+                // Подготавливаем скрипт для инъекции в тестовое окно
+                const testScript = `
+                (function() {
+                    console.log('🔍 Начинаем проверку селектора:', '${selector.replace(/'/g, "\\'")}');
+                    
+                    // Создаем стили для подсветки
+                    const style = document.createElement('style');
+                    style.textContent = \`
+                        .selector-test-highlight {
+                            outline: 3px solid red !important;
+                            box-shadow: 0 0 10px rgba(255, 0, 0, 0.5) !important;
+                            position: relative !important;
+                            background-color: rgba(255, 0, 0, 0.1) !important;
+                        }
+                        
+                        .selector-test-overlay {
+                            position: fixed;
+                            bottom: 20px;
+                            right: 20px;
+                            background: rgba(0, 0, 0, 0.8);
+                            color: white;
+                            z-index: 999999;
+                            padding: 15px;
+                            border-radius: 5px;
+                            font-family: Arial, sans-serif;
+                            max-width: 300px;
+                            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+                        }
+                        
+                        .selector-test-tooltip {
+                            position: absolute;
+                            background: rgba(0, 0, 0, 0.8);
+                            color: white;
+                            padding: 5px 10px;
+                            border-radius: 3px;
+                            font-size: 12px;
+                            z-index: 999999;
+                            max-width: 250px;
+                            word-break: break-word;
+                        }
+                        
+                        .selector-test-value {
+                            color: #6ff;
+                            font-family: monospace;
+                            padding: 3px 6px;
+                            background: rgba(0, 0, 0, 0.3);
+                            border-radius: 3px;
+                            margin: 5px 0;
+                            display: block;
+                            word-break: break-word;
+                        }
+                        
+                        .selector-test-new-value {
+                            color: #6f6;
+                            font-family: monospace;
+                            padding: 3px 6px;
+                            background: rgba(0, 0, 0, 0.3);
+                            border-radius: 3px;
+                            margin: 5px 0;
+                            display: block;
+                            word-break: break-word;
+                        }
+                    \`;
+                    document.head.appendChild(style);
+                    
+                    // Функция для проверки селектора
+                    function checkSelector() {
+                        try {
+                            // Находим элементы по селектору
+                            const elements = document.querySelectorAll('${selector.replace(/'/g, "\\'")}');
+                            const found = elements && elements.length > 0;
+                            const values = [];
+                            
+                            if (found) {
+                                // Создаем информационное окно
+                                const overlay = document.createElement('div');
+                                overlay.className = 'selector-test-overlay';
+                                overlay.innerHTML = \`
+                                    <div style="font-weight: bold; margin-bottom: 10px;">
+                                        Найдено элементов: \${elements.length}
+                                    </div>
+                                    <div style="margin-bottom: 10px;">
+                                        <span style="color: #aaa;">Селектор:</span>
+                                        <div class="selector-test-value">${selector.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                                    </div>
+                                    <div id="selector-test-original-value">
+                                        <span style="color: #aaa;">Текущее значение:</span>
+                                    </div>
+                                    <div style="margin: 10px 0;">
+                                        <span style="color: #aaa;">Будет заменено на:</span>
+                                        <div class="selector-test-new-value">${value.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                                    </div>
+                                    <div style="margin-top: 10px; font-size: 12px; color: #aaa;">
+                                        Нажмите ESC, чтобы закрыть это окно
+                                    </div>
+                                \`;
+                                document.body.appendChild(overlay);
+                                
+                                // Подсвечиваем каждый найденный элемент
+                                elements.forEach((el, index) => {
+                                    // Сохраняем значение
+                                    values.push(el.innerHTML);
+                                    
+                                    // Добавляем класс для подсветки
+                                    el.classList.add('selector-test-highlight');
+                                    
+                                    // Создаем всплывающую подсказку
+                                    const tooltip = document.createElement('div');
+                                    tooltip.className = 'selector-test-tooltip';
+                                    tooltip.innerHTML = \`Элемент #\${index + 1}\`;
+                                    
+                                    // Позиционируем подсказку
+                                    const rect = el.getBoundingClientRect();
+                                    tooltip.style.top = (rect.top + window.scrollY - 30) + 'px';
+                                    tooltip.style.left = (rect.left + window.scrollX) + 'px';
+                                    
+                                    document.body.appendChild(tooltip);
+                                    
+                                    // Добавляем обработчик наведения
+                                    el.addEventListener('mouseenter', () => {
+                                        el.style.backgroundColor = 'rgba(255, 0, 0, 0.3) !important';
+                                        tooltip.style.backgroundColor = 'rgba(255, 0, 0, 0.8)';
+                                    });
+                                    
+                                    el.addEventListener('mouseleave', () => {
+                                        el.style.backgroundColor = 'rgba(255, 0, 0, 0.1) !important';
+                                        tooltip.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
+                                    });
+                                    
+                                    // Прокручиваем к первому элементу
+                                    if (index === 0) {
+                                        el.scrollIntoView({
+                                            behavior: 'smooth',
+                                            block: 'center'
+                                        });
+                                    }
+                                });
+                                
+                                // Отображаем текущее значение первого элемента
+                                if (values.length > 0) {
+                                    const valueDisplay = document.getElementById('selector-test-original-value');
+                                    valueDisplay.innerHTML += \`<div class="selector-test-value">\${values[0].replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>\`;
+                                }
+                                
+                                // Обработчик клавиши ESC для закрытия окна
+                                document.addEventListener('keydown', (e) => {
+                                    if (e.key === 'Escape') {
+                                        const overlay = document.querySelector('.selector-test-overlay');
+                                        if (overlay) overlay.remove();
+                                        
+                                        document.querySelectorAll('.selector-test-tooltip').forEach(el => el.remove());
+                                        document.querySelectorAll('.selector-test-highlight').forEach(el => {
+                                            el.classList.remove('selector-test-highlight');
+                                        });
+                                    }
+                                });
+                                
+                                // Отправляем результат в родительское окно
+                                window.opener.postMessage({
+                                    type: 'selectorTestResult',
+                                    found: true,
+                                    count: elements.length,
+                                    currentValue: values[0] || ''
+                                }, '*');
+                                
+                                console.log('✅ Селектор проверен, найдено элементов:', elements.length);
+                            } else {
+                                console.warn('⚠️ Элементы не найдены по селектору:', '${selector.replace(/'/g, "\\'")}');
+                                
+                                // Создаем информационное окно с ошибкой
+                                const overlay = document.createElement('div');
+                                overlay.className = 'selector-test-overlay';
+                                overlay.style.backgroundColor = 'rgba(200, 0, 0, 0.8)';
+                                overlay.innerHTML = \`
+                                    <div style="font-weight: bold; margin-bottom: 10px;">
+                                        ⚠️ Элементы не найдены!
+                                    </div>
+                                    <div style="margin-bottom: 10px;">
+                                        <span style="color: #aaa;">Селектор:</span>
+                                        <div class="selector-test-value">${selector.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                                    </div>
+                                    <div style="margin-top: 15px;">
+                                        <button id="try-simpler-selector" style="background: #555; border: none; color: white; padding: 5px 10px; border-radius: 3px; cursor: pointer;">
+                                            Попробовать упрощенный селектор
+                                        </button>
+                                    </div>
+                                    <div style="margin-top: 10px; font-size: 12px; color: #aaa;">
+                                        Нажмите ESC, чтобы закрыть это окно
+                                    </div>
+                                \`;
+                                document.body.appendChild(overlay);
+                                
+                                // Обработчик для упрощенного селектора
+                                document.getElementById('try-simpler-selector').addEventListener('click', () => {
+                                    // Пробуем найти элемент цены любым способом
+                                    const priceSelectors = [
+                                        'app-page-inventory-price > div > span:first-child',
+                                        'app-page-inventory-price span',
+                                        '[class*="price"] > span',
+                                        '[class*="price-value"]',
+                                        'span[class*="price"]'
+                                    ];
+                                    
+                                    // Удаляем текущее окно
+                                    overlay.remove();
+                                    
+                                    // Пробуем каждый селектор
+                                    for (const simplifiedSelector of priceSelectors) {
+                                        const elements = document.querySelectorAll(simplifiedSelector);
+                                        if (elements && elements.length > 0) {
+                                            // Нашли элементы, показываем сообщение
+                                            const newOverlay = document.createElement('div');
+                                            newOverlay.className = 'selector-test-overlay';
+                                            newOverlay.style.backgroundColor = 'rgba(0, 150, 0, 0.8)';
+                                            newOverlay.innerHTML = \`
+                                                <div style="font-weight: bold; margin-bottom: 10px;">
+                                                    ✅ Найдено с упрощенным селектором!
+                                                </div>
+                                                <div style="margin-bottom: 10px;">
+                                                    <span style="color: #aaa;">Новый селектор:</span>
+                                                    <div class="selector-test-value">\${simplifiedSelector}</div>
+                                                </div>
+                                                <div style="margin-bottom: 10px;">
+                                                    <span style="color: #aaa;">Найдено элементов:</span>
+                                                    <div class="selector-test-value">\${elements.length}</div>
+                                                </div>
+                                                <div style="margin-top: 10px;">
+                                                    <button id="use-new-selector" style="background: #555; border: none; color: white; padding: 5px 10px; border-radius: 3px; cursor: pointer;">
+                                                        Использовать этот селектор
+                                                    </button>
+                                                </div>
+                                            \`;
+                                            document.body.appendChild(newOverlay);
+                                            
+                                            // Подсвечиваем найденные элементы
+                                            elements.forEach((el, index) => {
+                                                el.classList.add('selector-test-highlight');
+                                                
+                                                // Прокручиваем к первому элементу
+                                                if (index === 0) {
+                                                    el.scrollIntoView({
+                                                        behavior: 'smooth',
+                                                        block: 'center'
+                                                    });
+                                                }
+                                            });
+                                            
+                                            // Обработчик для использования нового селектора
+                                            document.getElementById('use-new-selector').addEventListener('click', () => {
+                                                window.opener.postMessage({
+                                                    type: 'useNewSelector',
+                                                    selector: simplifiedSelector,
+                                                    count: elements.length,
+                                                    currentValue: elements[0].innerHTML || ''
+                                                }, '*');
+                                                newOverlay.remove();
+                                            });
+                                            
+                                            // Нашли что-то, прерываем цикл
+                                            return;
+                                        }
+                                    }
+                                    
+                                    // Если ничего не нашли
+                                    const failOverlay = document.createElement('div');
+                                    failOverlay.className = 'selector-test-overlay';
+                                    failOverlay.style.backgroundColor = 'rgba(200, 0, 0, 0.8)';
+                                    failOverlay.innerHTML = \`
+                                        <div style="font-weight: bold; margin-bottom: 10px;">
+                                            ❌ Не удалось найти элементы даже с упрощенными селекторами!
+                                        </div>
+                                        <div style="margin-top: 10px;">
+                                            Попробуйте другой URL или используйте инструменты разработчика браузера для определения правильного селектора.
+                                        </div>
+                                    \`;
+                                    document.body.appendChild(failOverlay);
+                                });
+                                
+                                // Обработчик клавиши ESC для закрытия окна
+                                document.addEventListener('keydown', (e) => {
+                                    if (e.key === 'Escape') {
+                                        const overlay = document.querySelector('.selector-test-overlay');
+                                        if (overlay) overlay.remove();
+                                    }
+                                });
+                                
+                                // Отправляем результат в родительское окно
+                                window.opener.postMessage({
+                                    type: 'selectorTestResult',
+                                    found: false,
+                                    error: 'Элементы не найдены'
+                                }, '*');
+                            }
+                        } catch (error) {
+                            console.error('❌ Ошибка при проверке селектора:', error);
+                            
+                            // Отправляем ошибку в родительское окно
+                            window.opener.postMessage({
+                                type: 'selectorTestResult',
+                                found: false,
+                                error: error.message
+                            }, '*');
+                            
+                            // Показываем ошибку
+                            const overlay = document.createElement('div');
+                            overlay.className = 'selector-test-overlay';
+                            overlay.style.backgroundColor = 'rgba(200, 0, 0, 0.8)';
+                            overlay.innerHTML = \`
+                                <div style="font-weight: bold; margin-bottom: 10px;">
+                                    ❌ Ошибка при проверке селектора!
+                                </div>
+                                <div style="margin-bottom: 10px;">
+                                    <span style="color: #aaa;">Селектор:</span>
+                                    <div class="selector-test-value">${selector.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+                                </div>
+                                <div style="margin-bottom: 10px;">
+                                    <span style="color: #aaa;">Ошибка:</span>
+                                    <div class="selector-test-value">\${error.message}</div>
+                                </div>
+                            \`;
+                            document.body.appendChild(overlay);
+                        }
+                    }
+                    
+                    // Ждем немного, пока страница полностью загрузится
+                    setTimeout(checkSelector, 1000);
+                    
+                    // Также запускаем проверку при полной загрузке страницы
+                    window.addEventListener('load', () => {
+                        setTimeout(checkSelector, 500);
+                    });
+                })();
+                `;
+                
+                // Добавляем скрипт в новое окно после загрузки
+                testWindow.addEventListener('load', () => {
+                    try {
+                        // Создаем и добавляем скрипт
+                        const script = testWindow.document.createElement('script');
+                        script.textContent = testScript;
+                        testWindow.document.head.appendChild(script);
+                    } catch (e) {
+                        console.error('Ошибка при добавлении скрипта в тестовое окно:', e);
+                        showToast('Не удалось проверить селектор: ' + e.message, 'danger');
+                    }
+                });
+            }
+            
+            // УЛУЧШЕНО: Сохранение настроек страницы с валидацией селектора
             async function saveCustomPage(e) {
                 e.preventDefault();
                 
@@ -1951,10 +2633,10 @@ app.get('/adminka', (req, res) => {
                         throw new Error(errorData.error || 'Ошибка при сохранении');
                     }
                     
-                    showToast('Настройки успешно сохранены и активированы', 'success');
+                    showToast('✅ Настройки успешно сохранены и активированы! Изменения вступят в силу немедленно.', 'success');
                     
                     // Предлагаем проверить настройки
-                    if (confirm('Настройки сохранены. Хотите проверить их работу на странице?')) {
+                    if (confirm('Настройки сохранены. Хотите открыть страницу и проверить, что изменения применились?')) {
                         window.open(url, '_blank');
                     }
                     
@@ -1970,7 +2652,7 @@ app.get('/adminka', (req, res) => {
                     }
                 } catch (error) {
                     console.error('Ошибка сохранения:', error);
-                    showToast('Ошибка при сохранении: ' + error.message, 'danger');
+                    showToast('❌ Ошибка при сохранении: ' + error.message, 'danger');
                 } finally {
                     // Восстанавливаем кнопку
                     submitBtn.disabled = false;
@@ -1978,7 +2660,7 @@ app.get('/adminka', (req, res) => {
                 }
             }
             
-            // НОВОЕ: Функция предварительного просмотра
+            // НОВОЕ: Функция предварительного просмотра значения
             function previewModification() {
                 const value = customValueInput.value;
                 const previewContainer = document.getElementById('valuePreview');
@@ -1988,10 +2670,10 @@ app.get('/adminka', (req, res) => {
                     const container = document.createElement('div');
                     container.id = 'valuePreview';
                     container.className = 'mt-3 p-3 border rounded bg-light';
-                    container.innerHTML = \`
+                    container.innerHTML = `
                         <h6 class="mb-2">Предпросмотр значения:</h6>
-                        <div class="preview-content">\${value}</div>
-                    \`;
+                        <div class="preview-content">${value}</div>
+                    `;
                     
                     const customValueInput = document.getElementById('customValue');
                     customValueInput.parentNode.appendChild(container);
@@ -2011,70 +2693,16 @@ app.get('/adminka', (req, res) => {
                     .then(data => {
                         const statusBadge = document.getElementById('modificationsStatusBadge');
                         if (statusBadge) {
-                            statusBadge.className = \`badge \${data.active > 0 ? 'bg-success' : 'bg-secondary'}\`;
-                            statusBadge.textContent = \`\${data.active} активных модификаций\`;
+                            statusBadge.className = `badge ${data.active > 0 ? 'bg-success' : 'bg-secondary'}`;
+                            statusBadge.textContent = `${data.active} активных модификаций`;
                             
                             const lastUpdate = new Date(data.lastUpdated).toLocaleString();
-                            statusBadge.title = \`Последнее обновление: \${lastUpdate}\`;
+                            statusBadge.title = `Последнее обновление: ${lastUpdate}`;
                         }
                     })
                     .catch(error => {
                         console.error('Ошибка при проверке статуса модификаций:', error);
                     });
-            }
-            
-            // УЛУЧШЕНО: Проверка селектора с визуальной обратной связью
-            function testSelector() {
-                const url = pageUrlInput.value.trim();
-                const selector = cssSelectorInput.value.trim();
-                const value = customValueInput.value;
-                
-                if (!url || !selector) {
-                    showToast('Пожалуйста, введите URL и селектор', 'warning');
-                    return;
-                }
-                
-                // Сначала проверяем валидность селектора
-                fetch('/admin-api/validate-selector', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ selector })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (!data.valid) {
-                        showToast('Неверный селектор: ' + data.message, 'danger');
-                        return;
-                    }
-                    
-                    // Если селектор валиден, открываем страницу для тестирования
-                    const testWindow = window.open(url, '_blank');
-                    
-                    // Инжектим скрипт для проверки селектора
-                    testWindow.addEventListener('load', () => {
-                        try {
-                            const script = testWindow.document.createElement('script');
-                            script.textContent = testWindowScript;
-                            testWindow.document.head.appendChild(script);
-                            
-                            // Отправляем сообщение для проверки селектора
-                            setTimeout(() => {
-                                testWindow.postMessage({
-                                    type: 'testSelector',
-                                    selector: selector,
-                                    originalValue: value
-                                }, '*');
-                            }, 500);
-                        } catch (e) {
-                            showToast('Не удалось проверить селектор: ' + e.message, 'danger');
-                        }
-                    });
-                    
-                    showToast('Открывается страница для проверки селектора...', 'info');
-                })
-                .catch(error => {
-                    showToast('Ошибка при проверке селектора: ' + error.message, 'danger');
-                });
             }
             
             // Сброс всех модификаций
@@ -2125,94 +2753,122 @@ app.get('/adminka', (req, res) => {
                 }
             }
             
-            // Скрипт для инжекции в тестовое окно
-            const testWindowScript = `
-            (function() {
-                // Функция для проверки селектора
-                function checkSelector(selector, originalValue) {
-                    console.log('Проверка селектора:', selector);
-                    
-                    try {
-                        const elements = document.querySelectorAll(selector);
-                        const found = elements && elements.length > 0;
-                        let currentValue = '';
+            // Обработчик сообщений от тестового окна
+            window.addEventListener('message', (event) => {
+                if (event.data && event.data.type === 'selectorTestResult') {
+                    if (event.data.found) {
+                        showToast(`✅ Найдено ${event.data.count} элемент(ов) по селектору!`, 'success');
                         
-                        if (found) {
-                            currentValue = elements[0].innerHTML;
+                        // Добавляем визуальную индикацию соответствия текущего значения и нового
+                        const customValueInput = document.getElementById('customValue');
+                        if (customValueInput && event.data.currentValue) {
+                            // Отображаем текущее значение
+                            const currentValueDisplay = document.createElement('div');
+                            currentValueDisplay.className = 'alert alert-info mt-2';
+                            currentValueDisplay.innerHTML = `
+                                <strong>Текущее значение:</strong>
+                                <pre class="mt-2 p-2 bg-light">${event.data.currentValue.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+                                <button class="btn btn-sm btn-outline-primary mt-2" id="useCurrent">Использовать как основу</button>
+                            `;
                             
-                            // Подсветим найденные элементы
-                            elements.forEach(el => {
-                                const originalBackground = el.style.backgroundColor;
-                                const originalOutline = el.style.outline;
-                                
-                                el.style.outline = '2px solid red';
-                                el.style.backgroundColor = 'rgba(255, 100, 100, 0.1)';
-                                
-                                // Добавляем "оригинальное" значение рядом с элементом для сравнения
-                                if (originalValue) {
-                                    const overlay = document.createElement('div');
-                                    overlay.style.position = 'absolute';
-                                    overlay.style.zIndex = '9999';
-                                    overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
-                                    overlay.style.color = 'white';
-                                    overlay.style.padding = '5px 10px';
-                                    overlay.style.borderRadius = '4px';
-                                    overlay.style.fontSize = '14px';
-                                    overlay.style.maxWidth = '300px';
-                                    overlay.style.wordBreak = 'break-word';
-                                    overlay.innerHTML = \`
-                                        <div style="margin-bottom:5px"><strong>Текущее значение:</strong></div>
-                                        <div style="color:#ff9">\${el.innerHTML}</div>
-                                        <div style="margin:5px 0"><strong>Будет заменено на:</strong></div>
-                                        <div style="color:#9f9">\${originalValue}</div>
-                                    \`;
-                                    
-                                    // Позиционируем оверлей рядом с элементом
-                                    const rect = el.getBoundingClientRect();
-                                    overlay.style.top = (rect.top + window.scrollY) + 'px';
-                                    overlay.style.left = (rect.right + window.scrollX + 10) + 'px';
-                                    
-                                    document.body.appendChild(overlay);
-                                    
-                                    // Удаляем оверлей через 5 секунд
-                                    setTimeout(() => {
-                                        document.body.removeChild(overlay);
-                                        el.style.outline = originalOutline;
-                                        el.style.backgroundColor = originalBackground;
-                                    }, 5000);
-                                }
+                            // Удаляем предыдущее отображение, если оно есть
+                            const existingDisplay = document.getElementById('currentValueDisplay');
+                            if (existingDisplay) {
+                                existingDisplay.remove();
+                            }
+                            
+                            // Добавляем новое отображение
+                            currentValueDisplay.id = 'currentValueDisplay';
+                            customValueInput.parentNode.appendChild(currentValueDisplay);
+                            
+                            // Обработчик для кнопки использования текущего значения
+                            document.getElementById('useCurrent').addEventListener('click', () => {
+                                customValueInput.value = event.data.currentValue;
+                                previewModification();
+                                currentValueDisplay.remove();
                             });
                         }
+                    } else {
+                        showToast(`⚠️ Элементы по указанному селектору не найдены. ${event.data.error || ''}`, 'warning');
+                    }
+                } else if (event.data && event.data.type === 'useNewSelector') {
+                    // Пользователь выбрал новый селектор в тестовом окне
+                    const selectorInput = document.getElementById('cssSelector');
+                    selectorInput.value = event.data.selector;
+                    
+                    showToast(`✅ Селектор обновлен на более надежный: ${event.data.selector}`, 'success');
+                    
+                    // Отображаем текущее значение
+                    const customValueInput = document.getElementById('customValue');
+                    if (customValueInput && event.data.currentValue) {
+                        // Удаляем предыдущее отображение, если оно есть
+                        const existingDisplay = document.getElementById('currentValueDisplay');
+                        if (existingDisplay) {
+                            existingDisplay.remove();
+                        }
                         
-                        // Отправляем результат обратно
-                        window.opener.postMessage({
-                            type: 'selectorTestResult',
-                            found: found,
-                            count: found ? elements.length : 0,
-                            currentValue: currentValue
-                        }, '*');
+                        // Создаем новое отображение
+                        const currentValueDisplay = document.createElement('div');
+                        currentValueDisplay.className = 'alert alert-success mt-2';
+                        currentValueDisplay.innerHTML = `
+                            <strong>Текущее значение по новому селектору:</strong>
+                            <pre class="mt-2 p-2 bg-light">${event.data.currentValue.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+                            <button class="btn btn-sm btn-outline-primary mt-2" id="useCurrent">Использовать как основу</button>
+                        `;
                         
-                    } catch (error) {
-                        console.error('Ошибка при проверке селектора:', error);
+                        // Добавляем новое отображение
+                        currentValueDisplay.id = 'currentValueDisplay';
+                        customValueInput.parentNode.appendChild(currentValueDisplay);
                         
-                        window.opener.postMessage({
-                            type: 'selectorTestResult',
-                            found: false,
-                            error: error.message
-                        }, '*');
+                        // Обработчик для кнопки использования текущего значения
+                        document.getElementById('useCurrent').addEventListener('click', () => {
+                            customValueInput.value = event.data.currentValue;
+                            previewModification();
+                            currentValueDisplay.remove();
+                        });
                     }
                 }
+            });
+            
+            // Добавляем поддержку для URL с шаблонами
+            document.getElementById('pageUrl').addEventListener('change', function() {
+                const urlInput = document.getElementById('pageUrl');
+                const url = urlInput.value.trim();
                 
-                // Обработчик сообщений от админ-панели
-                window.addEventListener('message', (event) => {
-                    if (event.data && event.data.type === 'testSelector') {
-                        checkSelector(event.data.selector, event.data.originalValue);
+                // Проверяем, содержит ли URL параметр id=
+                if (url.includes('id=')) {
+                    const idMatch = /id=([0-9]+)/.exec(url);
+                    if (idMatch && idMatch[1]) {
+                        const baseUrl = url.split('?')[0];
+                        const id = idMatch[1];
+                        
+                        // Предлагаем использовать шаблон
+                        const templateSuggestion = document.createElement('div');
+                        templateSuggestion.className = 'alert alert-info mt-2';
+                        templateSuggestion.innerHTML = `
+                            <strong>Совет:</strong> Вы можете использовать шаблон для всех товаров этого типа:<br>
+                            <code>${baseUrl}*</code>
+                            <button class="btn btn-sm btn-outline-primary mt-2" id="useTemplate">Использовать шаблон</button>
+                        `;
+                        
+                        // Удаляем предыдущее предложение, если оно есть
+                        const existingSuggestion = document.getElementById('templateSuggestion');
+                        if (existingSuggestion) {
+                            existingSuggestion.remove();
+                        }
+                        
+                        // Добавляем новое предложение
+                        templateSuggestion.id = 'templateSuggestion';
+                        urlInput.parentNode.appendChild(templateSuggestion);
+                        
+                        // Обработчик для кнопки использования шаблона
+                        document.getElementById('useTemplate').addEventListener('click', () => {
+                            urlInput.value = `${baseUrl}*`;
+                            templateSuggestion.remove();
+                        });
                     }
-                });
-                
-                console.log('Скрипт проверки селектора загружен');
-            })();
-            `;
+                }
+            });
             
             // Инициализация
             document.addEventListener('DOMContentLoaded', () => {
@@ -2231,41 +2887,6 @@ app.get('/adminka', (req, res) => {
                 if (refreshCacheBtn) {
                     refreshCacheBtn.addEventListener('click', clearCache);
                 }
-                
-                // Добавляем обработчик сообщений от тестового окна
-                window.addEventListener('message', (event) => {
-                    if (event.data && event.data.type === 'selectorTestResult') {
-                        if (event.data.found) {
-                            showToast(`Найдено ${event.data.count} элемент(ов) по селектору. Текущее значение: "${event.data.currentValue}"`, 'success');
-                            
-                            // Добавляем визуальную индикацию соответствия текущего значения и нового
-                            const customValueInput = document.getElementById('customValue');
-                            if (customValueInput && event.data.currentValue) {
-                                // Временно подсвечиваем поле, если значения разные
-                                if (customValueInput.value.trim() !== event.data.currentValue.trim()) {
-                                    customValueInput.classList.add('border-warning');
-                                    
-                                    // Предлагаем использовать текущее значение как шаблон
-                                    if (confirm(`Хотите использовать текущее значение "${event.data.currentValue}" как основу для модификации?`)) {
-                                        customValueInput.value = event.data.currentValue;
-                                        previewModification();
-                                    }
-                                    
-                                    setTimeout(() => {
-                                        customValueInput.classList.remove('border-warning');
-                                    }, 3000);
-                                } else {
-                                    customValueInput.classList.add('border-success');
-                                    setTimeout(() => {
-                                        customValueInput.classList.remove('border-success');
-                                    }, 3000);
-                                }
-                            }
-                        } else {
-                            showToast('Элементы по указанному селектору не найдены. Проверьте правильность селектора.', 'warning');
-                        }
-                    }
-                });
                 
                 // Добавляем обработчик для предпросмотра значения
                 customValueInput.addEventListener('input', previewModification);
@@ -2300,9 +2921,66 @@ app.get('/adminka', (req, res) => {
                 if (urlInput && urlInput.parentNode) {
                     urlInput.parentNode.appendChild(urlPattern);
                 }
+                
+                // Добавляем кнопку "Очистить форму"
+                const formActions = document.querySelector('#customPageForm .btn-primary').parentNode;
+                
+                const resetButton = document.createElement('button');
+                resetButton.type = 'button';
+                resetButton.className = 'btn btn-outline-secondary ms-2';
+                resetButton.textContent = 'Очистить форму';
+                resetButton.addEventListener('click', function() {
+                    document.getElementById('customPageForm').reset();
+                    
+                    // Удаляем дополнительные элементы
+                    const currentValueDisplay = document.getElementById('currentValueDisplay');
+                    if (currentValueDisplay) currentValueDisplay.remove();
+                    
+                    const templateSuggestion = document.getElementById('templateSuggestion');
+                    if (templateSuggestion) templateSuggestion.remove();
+                    
+                    const valuePreview = document.getElementById('valuePreview');
+                    if (valuePreview) valuePreview.remove();
+                });
+                
+                if (formActions) {
+                    formActions.appendChild(resetButton);
+                }
+                
+                // Дополнительная кнопка для упрощенного селектора цены
+                const selectorInput = document.getElementById('cssSelector');
+                if (selectorInput) {
+                    const selectorHelpText = selectorInput.nextElementSibling;
+                    
+                    const simplifyButton = document.createElement('button');
+                    simplifyButton.type = 'button';
+                    simplifyButton.className = 'btn btn-sm btn-outline-success mt-2';
+                    simplifyButton.textContent = 'Использовать упрощенный селектор для цены';
+                    simplifyButton.addEventListener('click', function() {
+                        selectorInput.value = 'app-page-inventory-price > div > span:first-child';
+                        
+                        showToast('✅ Установлен упрощенный селектор для цены', 'success');
+                    });
+                    
+                    // Добавляем кнопку после подсказки
+                    if (selectorHelpText) {
+                        selectorHelpText.appendChild(document.createElement('br'));
+                        selectorHelpText.appendChild(simplifyButton);
+                    } else {
+                        selectorInput.parentNode.appendChild(simplifyButton);
+                    }
+                }
             });
         </script>
-        app.use('*', async (req, res, next) => {
+    </body>
+    </html>
+    `;
+    
+    res.send(html);
+});
+
+// ИСПРАВЛЕНО: Улучшен основной обработчик HTTP запросов с повторными попытками
+app.use('*', async (req, res, next) => {
     try {
         // Пропускаем запросы к админке и API
         if (req.originalUrl.startsWith('/adminka') || req.originalUrl.startsWith('/admin-api')) {
@@ -2496,6 +3174,138 @@ app.get('/adminka', (req, res) => {
             error: 'Proxy Error', 
             message: error.message,
             stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+});
+
+// ИСПРАВЛЕНО: Обработка GraphQL запросов с повторными попытками
+app.post('/api/graphql', async (req, res) => {
+    try {
+        const targetUrl = TARGET_HOST + '/api/graphql';
+        const baseUrl = getBaseUrl(req);
+        const sessionId = req.cookies.sessionId || Math.random().toString(36).substring(7);
+        const session = getSession(sessionId);
+        
+        // Собираем cookies для запроса
+        const requestCookies = new Map([
+            ...session.cookies,
+            ...parseCookieHeader(req.headers.cookie)
+        ]);
+        
+        console.log(`📊 GraphQL: ${req.method} ${req.originalUrl}`);
+        
+        // ИСПРАВЛЕНО: Улучшенные заголовки для GraphQL
+        const axiosConfig = {
+            method: req.method,
+            url: targetUrl,
+            headers: {
+                ...req.headers,
+                'host': 'market.csgo.com',
+                'origin': 'https://market.csgo.com',
+                'referer': 'https://market.csgo.com/',
+                'content-type': 'application/json',
+                'accept': 'application/json',
+                'accept-language': 'en-US,en;q=0.9',
+                'user-agent': req.headers['user-agent'] || 'Mozilla/5.0',
+                'cookie': createCookieString(requestCookies),
+                'connection': 'keep-alive'
+            },
+            data: req.body,
+            responseType: 'json',
+            validateStatus: () => true, // Принимаем любой статус ответа
+            maxRedirects: 0,
+            timeout: 30000,
+            httpsAgent: httpsAgent
+        };
+        
+        // Удаляем заголовки прокси
+        delete axiosConfig.headers['x-forwarded-for'];
+        delete axiosConfig.headers['x-forwarded-proto'];
+        delete axiosConfig.headers['x-forwarded-host'];
+        
+        // ИСПРАВЛЕНО: Добавляем повторные попытки для GraphQL запросов
+        let retries = 0;
+        const maxRetries = 3;
+        let response = null;
+        let lastError = null;
+        
+        while (retries < maxRetries) {
+            try {
+                if (retries > 0) {
+                    console.log(`GraphQL retry ${retries}/${maxRetries} for ${req.originalUrl}`);
+                    await new Promise(resolve => setTimeout(resolve, 1000 * retries)); // Увеличивающаяся задержка
+                }
+                
+                response = await axios(axiosConfig);
+                
+                // Если успешно, выходим из цикла
+                if (response.status !== 500) {
+                    break;
+                }
+                
+                console.warn(`GraphQL returned 500, retry ${retries + 1}/${maxRetries}`);
+                retries++;
+                
+            } catch (error) {
+                console.error(`GraphQL request failed (attempt ${retries + 1}/${maxRetries}):`, error.message);
+                lastError = error;
+                retries++;
+                
+                if (retries >= maxRetries) {
+                    throw error;
+                }
+            }
+        }
+        
+        // Если не смогли получить ответ после всех попыток
+        if (!response) {
+            throw lastError || new Error('Failed after max retries');
+        }
+        
+        // Сохраняем cookies из ответа
+        if (response.headers['set-cookie']) {
+            const newCookies = parseSetCookieHeaders(response.headers['set-cookie']);
+            newCookies.forEach((value, name) => {
+                session.cookies.set(name, value);
+            });
+        }
+        
+        // Устанавливаем sessionId cookie если её нет
+        if (!req.cookies.sessionId) {
+            res.cookie('sessionId', sessionId, { 
+                httpOnly: true, 
+                secure: isSecure(req),
+                sameSite: isSecure(req) ? 'none' : 'lax'
+            });
+        }
+        
+        // Устанавливаем заголовки
+        Object.entries(response.headers).forEach(([key, value]) => {
+            if (!['content-encoding', 'content-length', 'transfer-encoding'].includes(key.toLowerCase())) {
+                res.set(key, value);
+            }
+        });
+        
+        // ИСПРАВЛЕНО: Специальная обработка GraphQL ошибок
+        if (response.data && response.data.errors) {
+            console.warn('GraphQL responded with errors:', JSON.stringify(response.data.errors));
+            
+            // Если это ошибка viewItem - возвращаем пустой результат вместо ошибки
+            if (JSON.stringify(response.data.errors).includes('viewItem')) {
+                console.log('Replacing viewItem error with empty response');
+                response.data = { data: { viewItem: null } };
+            }
+        }
+        
+        res.status(response.status);
+        res.json(response.data);
+        
+    } catch (error) {
+        console.error('❌ GraphQL error:', error.message);
+        // Возвращаем клиенту обобщенный ответ с пустыми данными
+        res.status(200).json({ 
+            data: {},
+            errors: [{ message: 'GraphQL proxy error, please retry' }]
         });
     }
 });
