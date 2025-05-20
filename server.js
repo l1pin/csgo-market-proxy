@@ -100,6 +100,11 @@ function getBaseUrl(req) {
 
 // Middleware для CORS и заголовков
 app.use((req, res, next) => {
+    // Если запрос к админке, пропускаем CORS настройки
+    if (req.originalUrl && (req.originalUrl.startsWith('/adminka') || req.originalUrl.startsWith('/admin-api'))) {
+        return next();
+    }
+    
     // Установка CORS заголовков
     const origin = req.headers.origin || '*';
     res.header('Access-Control-Allow-Origin', origin);
