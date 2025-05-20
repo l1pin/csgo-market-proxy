@@ -1269,6 +1269,23 @@ app.get('/admin-api/list-custom-pages', (req, res) => {
     res.json(list);
 });
 
+// Добавляем API для очистки кеша
+app.post('/admin-api/clear-cache', (req, res) => {
+    try {
+        // Очищаем кеш в браузере пользователя с помощью специальных заголовков
+        res.set('Clear-Site-Data', '"cache", "cookies", "storage"');
+        res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
+        
+        // Возвращаем успешный ответ
+        res.json({ success: true, message: 'Кеш успешно очищен' });
+    } catch (error) {
+        console.error('Ошибка при очистке кеша:', error);
+        res.status(500).json({ success: false, error: 'Внутренняя ошибка сервера при очистке кеша' });
+    }
+});
+
 // Админ-панель
 app.get('/adminka', (req, res) => {
     // HTML для админ-панели
@@ -1343,7 +1360,7 @@ app.get('/adminka', (req, res) => {
                                 <div class="mb-3">
                                     <label for="pageUrl" class="form-label">URL страницы</label>
                                     <input type="text" class="form-control" id="pageUrl" placeholder="https://twtichcs.live/ru/Rifle/AK-47/..." required>
-                                    <div class="form-text">Полный URL страницы, которую хотите модифицировать</div>
+                                    <div class="form-text">Полный URL страницы, которую хотите модифицировать. Можно использовать '*' как подстановочный знак.</div>
                                 </div>
                                 
                                 <div class="mb-3">
@@ -1360,6 +1377,7 @@ app.get('/adminka', (req, res) => {
                                 
                                 <button type="submit" class="btn btn-primary">Сохранить</button>
                                 <button type="button" id="testButton" class="btn btn-outline-secondary ms-2">Проверить селектор</button>
+                                <button type="button" id="refreshCacheBtn" class="btn btn-outline-info ms-2">Сбросить кеш</button>
                             </form>
                         </div>
                     </div>
@@ -1770,6 +1788,28 @@ app.get('/adminka', (req, res) => {
                 }
             }
             
+            // Функция для очистки кеша
+            function clearCache() {
+                try {
+                    fetch('/admin-api/clear-cache', { method: 'POST' })
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.success) {
+                                showToast('Кеш успешно очищен', 'success');
+                            } else {
+                                showToast('Ошибка при очистке кеша: ' + (data.error || 'Неизвестная ошибка'), 'danger');
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Ошибка при очистке кеша:', error);
+                            showToast('Ошибка при очистке кеша: ' + error.message, 'danger');
+                        });
+                } catch (error) {
+                    console.error('Ошибка при очистке кеша:', error);
+                    showToast('Ошибка при очистке кеша: ' + error.message, 'danger');
+                }
+            }
+            
             // Инициализация
             document.addEventListener('DOMContentLoaded', () => {
                 // Загружаем список модифицированных страниц
@@ -1781,6 +1821,12 @@ app.get('/adminka', (req, res) => {
                 confirmResetAllBtn.addEventListener('click', resetAllCustomPages);
                 resetAllBtn.addEventListener('click', () => resetAllModal.show());
                 testButton.addEventListener('click', testSelector);
+                
+                // Добавляем обработчик для кнопки сброса кеша
+                const refreshCacheBtn = document.getElementById('refreshCacheBtn');
+                if (refreshCacheBtn) {
+                    refreshCacheBtn.addEventListener('click', clearCache);
+                }
                 
                 // Добавляем обработчик сообщений от тестового окна
                 window.addEventListener('message', (event) => {
