@@ -1882,7 +1882,7 @@ app.get('/adminka', (req, res) => {
                             <form id="customPageForm">
                                 <div class="mb-3">
                                     <label for="pageUrl" class="form-label">URL страницы</label>
-                                    <input type="text" class="form-control" id="pageUrl" placeholder="https://twtichcs.live/ru/Rifle/AK-47/..." required>
+                                    <input type="text" class="form-control" id="pageUrl" placeholder="https://market-csgo.co/ru/Rifle/AK-47/..." required>
                                     <div class="form-text">Полный URL страницы, которую хотите модифицировать. Можно использовать '*' как подстановочный знак.</div>
                                 </div>
                                 
