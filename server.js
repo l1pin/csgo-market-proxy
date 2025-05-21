@@ -878,14 +878,21 @@ app.get('/admin-api/selector-rules', (req, res) => {
     try {
         const page = req.query.page;
         
-        // Если указан параметр page, возвращаем только правила для этой конкретной страницы
+        // Если указан параметр page, возвращаем только правила для этой страницы
         if (page) {
             const matchingRules = Array.from(selectorRules.values())
                 .filter(rule => {
-                    // 1. Точное совпадение полного URL - включая все параметры (id)
+                    // Проверка совпадения URL
+                    // 1. Точное совпадение
                     if (rule.page === page) return true;
                     
-                    // 2. Поддержка регулярных выражений для специальных случаев
+                    // 2. Совпадение по шаблону без учета параметров после ?
+                    const pageBase = page.split('?')[0];
+                    const ruleBase = rule.page.split('?')[0];
+                    
+                    if (pageBase === ruleBase) return true;
+                    
+                    // 3. Совпадение по регулярному выражению (если правило содержит регулярное выражение)
                     if (rule.page.startsWith('/') && rule.page.endsWith('/')) {
                         try {
                             const regex = new RegExp(rule.page.substring(1, rule.page.length - 1));
@@ -1775,32 +1782,13 @@ const selectorReplacementScript = `
         // Хранилище активных правил для текущей страницы
         let activeRules = [];
         
-        // Хранилище последнего URL для точного сравнения
-        let lastExactUrl = window.location.href;
-        
         // Функция для подмены значений селекторов
-        async function replaceSelectors(forceRestore = false) {
+        async function replaceSelectors() {
             try {
-                // Получаем ПОЛНЫЙ текущий URL страницы - включая все параметры
+                // Текущий URL страницы
                 const currentPath = window.location.href;
                 
-                // Проверяем, изменился ли URL точно - сравниваем полный URL со всеми параметрами
-                const urlChanged = currentPath !== lastExactUrl;
-                
-                // Если URL изменился или нужно принудительно восстановить значения
-                if (urlChanged || forceRestore) {
-                    // Сначала восстанавливаем все оригинальные значения
-                    restoreOriginalValues();
-                    
-                    // Обновляем последний точный URL
-                    lastExactUrl = currentPath;
-                    
-                    // Сбрасываем активные правила
-                    activeRules = [];
-                }
-                
                 // Получаем правила подмены с нашего прокси-сервера
-                // Указываем полный URL включая ID и все параметры для точного соответствия
                 const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(currentPath), {
                     method: 'GET',
                     credentials: 'include'
@@ -1810,14 +1798,17 @@ const selectorReplacementScript = `
                 
                 const rules = await response.json();
                 
-                // Если для текущей страницы нет правил, больше ничего делать не нужно
-                // (оригинальные значения уже восстановлены выше)
-                if (!rules || rules.length === 0) return;
+                // Если для текущей страницы нет правил, возвращаем все измененные селекторы в исходное состояние
+                if (!rules || rules.length === 0) {
+                    restoreOriginalValues();
+                    activeRules = []; // Сбрасываем активные правила
+                    return;
+                }
                 
                 // Сохраняем текущие активные правила
                 activeRules = rules.map(rule => rule.selector);
                 
-                // Проходим по всем правилам точно для этого URL
+                // Проходим по всем правилам
                 rules.forEach(rule => {
                     try {
                         // Находим все элементы по селектору
@@ -1830,18 +1821,15 @@ const selectorReplacementScript = `
                             // Если для этого селектора уже есть наблюдатель, не создаем новый
                             if (!window._selectorObservers[rule.selector]) {
                                 const observer = new MutationObserver(() => {
-                                    // Проверяем, что мы все еще на нужной странице
-                                    if (window.location.href === lastExactUrl) {
-                                        const elements = document.querySelectorAll(rule.selector);
-                                        if (elements.length > 0) {
-                                            elements.forEach(element => {
-                                                // Сохраняем оригинальное значение, если еще не сохранено
-                                                if (!originalValues.has(element)) {
-                                                    originalValues.set(element, element.innerHTML);
-                                                }
-                                                element.innerHTML = rule.value;
-                                            });
-                                        }
+                                    const elements = document.querySelectorAll(rule.selector);
+                                    if (elements.length > 0) {
+                                        elements.forEach(element => {
+                                            // Сохраняем оригинальное значение, если еще не сохранено
+                                            if (!originalValues.has(element)) {
+                                                originalValues.set(element, element.innerHTML);
+                                            }
+                                            element.innerHTML = rule.value;
+                                        });
                                     }
                                 });
                                 
@@ -1869,6 +1857,9 @@ const selectorReplacementScript = `
                     } catch (err) {}
                 });
                 
+                // Восстанавливаем оригинальные значения для селекторов, которые больше не нужно подменять
+                restoreNonActiveSelectors();
+                
             } catch (err) {}
         }
         
@@ -1881,20 +1872,48 @@ const selectorReplacementScript = `
             });
         }
         
+        // Функция для восстановления оригинальных значений только тех элементов,
+        // которые больше не нужно подменять на текущей странице
+        function restoreNonActiveSelectors() {
+            originalValues.forEach((originalValue, element) => {
+                if (!element || !document.body.contains(element)) {
+                    originalValues.delete(element);
+                    return;
+                }
+                
+                // Проверяем, есть ли этот элемент в списке активных селекторов
+                let shouldRestore = true;
+                
+                for (const selector of activeRules) {
+                    if (element.matches(selector)) {
+                        shouldRestore = false;
+                        break;
+                    }
+                }
+                
+                // Если элемент не должен быть подменен на текущей странице, восстанавливаем его
+                if (shouldRestore && element.innerHTML !== originalValue) {
+                    element.innerHTML = originalValue;
+                }
+            });
+        }
+        
         // Выполняем подмену после загрузки DOM
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => replaceSelectors());
+            document.addEventListener('DOMContentLoaded', replaceSelectors);
         } else {
             replaceSelectors();
         }
         
-        // Функция для проверки изменения URL - использует более точную проверку
+        // Отслеживаем изменения URL для SPA
+        let lastUrl = window.location.href;
+        
+        // Функция для проверки изменения URL
         function checkUrlChange() {
             const currentUrl = window.location.href;
-            if (currentUrl !== lastExactUrl) {
-                // Запускаем подмену с принудительным восстановлением, 
-                // потому что URL изменился (особенно важно для SPA)
-                setTimeout(() => replaceSelectors(true), 50);
+            if (currentUrl !== lastUrl) {
+                lastUrl = currentUrl;
+                setTimeout(replaceSelectors, 100);
             }
             setTimeout(checkUrlChange, 100);
         }
@@ -1903,92 +1922,33 @@ const selectorReplacementScript = `
         checkUrlChange();
         
         // Наблюдаем за изменениями DOM для активных элементов
-        const domObserver = new MutationObserver((mutations) => {
-            // Проверяем только значимые изменения DOM
-            const importantChanges = mutations.some(m => 
-                m.type === 'childList' || 
-                (m.type === 'characterData' && m.target.parentNode && 
-                 (m.target.parentNode.tagName === 'SPAN' || m.target.parentNode.tagName === 'DIV'))
-            );
-            
-            if (importantChanges && activeRules.length > 0) {
-                // Если обнаружены значимые изменения DOM и у нас есть активные правила
-                setTimeout(() => replaceSelectors(false), 10);
+        const domObserver = new MutationObserver(() => {
+            if (activeRules.length > 0) {
+                setTimeout(replaceSelectors, 10);
             }
         });
         
         // Запускаем наблюдатель с минимальной конфигурацией
         domObserver.observe(document.documentElement, {
             childList: true,
-            subtree: true,
-            characterData: true
+            subtree: true
         });
         
-        // Перехват History API для SPA
+        // Упрощенная обработка History API
         if (window.history) {
-            // Обработка pushState - используется при переходе на новую страницу
             const originalPushState = window.history.pushState;
             if (originalPushState) {
                 window.history.pushState = function() {
-                    // Сначала вызываем оригинальный метод
                     originalPushState.apply(this, arguments);
-                    
-                    // Затем восстанавливаем значения и применяем новые правила
-                    // для нового URL (с небольшой задержкой для обновления DOM)
-                    setTimeout(() => replaceSelectors(true), 50);
-                };
-            }
-            
-            // Аналогично для replaceState
-            const originalReplaceState = window.history.replaceState;
-            if (originalReplaceState) {
-                window.history.replaceState = function() {
-                    originalReplaceState.apply(this, arguments);
-                    setTimeout(() => replaceSelectors(true), 50);
+                    setTimeout(replaceSelectors, 100);
                 };
             }
         }
         
         // Обработка popstate для навигации назад/вперед
         window.addEventListener('popstate', () => {
-            setTimeout(() => replaceSelectors(true), 50);
+            setTimeout(replaceSelectors, 100);
         });
-        
-        // Особая обработка для Angular и React Router
-        let lastCheckedUrl = window.location.href;
-        
-        // Функция для регулярной проверки URL в SPA приложениях
-        setInterval(() => {
-            const currentUrl = window.location.href;
-            if (currentUrl !== lastCheckedUrl) {
-                lastCheckedUrl = currentUrl;
-                replaceSelectors(true);
-            }
-        }, 100);
-        
-        // Перехват fetch и XHR запросов для обнаружения навигации через API
-        const originalFetch = window.fetch;
-        window.fetch = async function(...args) {
-            const result = await originalFetch.apply(this, args);
-            // После любого fetch-запроса проверяем необходимость подмены
-            // (возможно, был выполнен запрос на загрузку данных для новой страницы)
-            setTimeout(() => replaceSelectors(false), 300);
-            return result;
-        };
-        
-        const originalXHROpen = XMLHttpRequest.prototype.open;
-        XMLHttpRequest.prototype.open = function(...args) {
-            const xhr = this;
-            const originalOnLoad = xhr.onload;
-            
-            xhr.onload = function() {
-                if (originalOnLoad) originalOnLoad.apply(this, arguments);
-                // После успешной загрузки XHR проверяем необходимость подмены
-                setTimeout(() => replaceSelectors(false), 300);
-            };
-            
-            return originalXHROpen.apply(this, args);
-        };
     } catch(e) {}
 })();
 </script>
