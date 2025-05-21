@@ -1,7 +1,7 @@
 {
   "name": "csgo-market-proxy-ultimate",
   "version": "5.0.0",
-  "description": "Ultimate proxy server для market.csgo.com",
+  "description": "Ultimate proxy server для market.csgo.com с админ-панелью",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -12,7 +12,9 @@
     "axios": "^1.6.2",
     "cookie-parser": "^1.4.6",
     "compression": "^1.7.4",
-    "ws": "^8.14.2"
+    "ws": "^8.14.2",
+    "express-basic-auth": "^1.2.1",
+    "body-parser": "^1.20.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
