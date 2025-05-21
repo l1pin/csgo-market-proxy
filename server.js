@@ -893,19 +893,25 @@ app.get('/admin', (req, res) => {
 });
 
 // НОВОЕ: API для админ-панели
-// Получение всех правил
+// НОВОЕ: Упрощенная и улучшенная логика для получения правил
 app.get('/admin-api/selector-rules', (req, res) => {
     try {
         const page = req.query.page;
         
-        // Если указан параметр page, возвращаем только правила для этой конкретной страницы
+        // Если указан параметр page, возвращаем правила для этой страницы
         if (page) {
             const matchingRules = Array.from(selectorRules.values())
                 .filter(rule => {
-                    // 1. Точное совпадение полного URL - включая все параметры (id)
+                    // Сначала проверяем точное совпадение URL
                     if (rule.page === page) return true;
                     
-                    // 2. Поддержка регулярных выражений для специальных случаев
+                    // Затем проверяем базовое совпадение URL без параметров
+                    const pageBase = page.split('?')[0];
+                    const ruleBase = rule.page.split('?')[0];
+                    
+                    if (pageBase === ruleBase) return true;
+                    
+                    // Наконец, проверяем совпадение по регулярному выражению
                     if (rule.page.startsWith('/') && rule.page.endsWith('/')) {
                         try {
                             const regex = new RegExp(rule.page.substring(1, rule.page.length - 1));
@@ -1794,210 +1800,141 @@ const proxyScript = `
 </script>
 `;
 
-// НОВОЕ: Скрипт для подмены значений селекторов - работает только с конкретными значениями
+// НОВЫЙ ПОДХОД: Максимально простой и надежный скрипт подмены селекторов
 const selectorReplacementScript = `
 <script type="text/javascript">
+// Простая система подмены селекторов
 (function() {
-    try {
-        // Глобальное хранилище для правил
-        let valueReplacementRules = [];
-        
-        // Функция для получения правил с сервера
-        async function fetchRules() {
-            try {
-                const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(window.location.href), {
-                    method: 'GET',
-                    credentials: 'include'
-                });
-                
-                if (!response.ok) return [];
-                
+    // Хранилище правил подмены
+    let replacementRules = [];
+    
+    // Функция для загрузки правил подмены для текущей страницы
+    async function loadRules() {
+        try {
+            const url = '/admin-api/selector-rules?page=' + encodeURIComponent(window.location.href);
+            const response = await fetch(url, { credentials: 'include' });
+            if (response.ok) {
                 const rules = await response.json();
-                return rules || [];
-            } catch (err) {
-                return [];
+                replacementRules = rules || [];
             }
+        } catch (e) {
+            console.error('Ошибка загрузки правил подмены:', e);
         }
-        
-        // Функция для проверки и подмены значений
-        async function checkAndReplaceValues() {
-            // Получаем правила для текущей страницы
-            valueReplacementRules = await fetchRules();
-            
-            // Если правил нет, ничего не делаем
-            if (!valueReplacementRules || valueReplacementRules.length === 0) return;
-            
-            // Проходим по каждому правилу
-            valueReplacementRules.forEach(rule => {
-                // Находим все элементы, соответствующие селектору
+    }
+    
+    // Функция для применения правил подмены к текущей странице
+    function applyReplacements() {
+        replacementRules.forEach(rule => {
+            try {
+                // Находим все элементы по селектору
                 const elements = document.querySelectorAll(rule.selector);
                 
-                // Если элементы найдены, проверяем их
+                // Применяем подмену к каждому найденному элементу
                 elements.forEach(element => {
-                    // Если у правила есть оригинальное значение и оно совпадает с текущим - подменяем
-                    // Если оригинальное значение не указано - подменяем в любом случае
-                    if (!rule.originalValue || element.innerHTML.trim() === rule.originalValue.trim()) {
+                    // Если указано оригинальное значение, проверяем совпадение
+                    if (rule.originalValue && rule.originalValue.trim()) {
+                        // Применяем подмену только если текущее значение совпадает с оригинальным
+                        if (element.innerHTML.trim() === rule.originalValue.trim()) {
+                            element.innerHTML = rule.value;
+                        }
+                    } else {
+                        // Если оригинальное значение не указано, просто подменяем
                         element.innerHTML = rule.value;
                     }
                 });
-            });
-        }
+            } catch (e) {
+                console.error('Ошибка применения правила подмены:', e);
+            }
+        });
+    }
+    
+    // Функция для обработки изменений URL в SPA
+    function handleURLChange() {
+        let lastURL = window.location.href;
         
-        // Основная функция наблюдения за DOM
-        function setupDOMObserver() {
-            // Наблюдатель изменений в DOM
-            const observer = new MutationObserver((mutations) => {
-                // Анализируем только изменения контента
-                const textChanges = mutations.some(mutation => 
-                    mutation.type === 'characterData' || 
-                    mutation.type === 'childList'
-                );
-                
-                if (textChanges && valueReplacementRules.length > 0) {
-                    // Проходим по каждому правилу
-                    valueReplacementRules.forEach(rule => {
-                        const elements = document.querySelectorAll(rule.selector);
-                        elements.forEach(element => {
-                            // Подменяем только если есть совпадение с оригинальным значением
-                            if (!rule.originalValue || element.innerHTML.trim() === rule.originalValue.trim()) {
-                                element.innerHTML = rule.value;
-                            }
-                        });
-                    });
-                }
-            });
-            
-            // Запускаем наблюдение за всем документом
-            observer.observe(document.documentElement, {
-                childList: true,
-                subtree: true,
-                characterData: true
-            });
-        }
+        setInterval(() => {
+            const currentURL = window.location.href;
+            if (currentURL !== lastURL) {
+                lastURL = currentURL;
+                // Загружаем правила для нового URL и применяем их
+                loadRules().then(applyReplacements);
+            }
+        }, 300);
+    }
+    
+    // Основной наблюдатель за изменениями в DOM
+    function observeDOM() {
+        // Создаем MutationObserver для отслеживания изменений DOM
+        const observer = new MutationObserver(() => {
+            // Применяем правила подмены при любых изменениях DOM
+            applyReplacements();
+        });
         
-        // Перехват XHR запросов для обработки динамических данных
-        function interceptXHR() {
-            const originalXHROpen = XMLHttpRequest.prototype.open;
-            const originalXHRSend = XMLHttpRequest.prototype.send;
+        // Запускаем наблюдатель для всего документа
+        observer.observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+            characterData: true
+        });
+    }
+    
+    // Перехватчик XHR запросов
+    function interceptXHR() {
+        const originalOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function() {
+            const xhr = this;
+            const originalOnLoad = xhr.onload;
             
-            XMLHttpRequest.prototype.open = function() {
-                // Сохраняем контекст для использования внутри обработчика
-                const xhr = this;
-                
-                // Добавляем обработчик onreadystatechange для проверки после загрузки
-                const originalOnReadyStateChange = xhr.onreadystatechange;
-                xhr.onreadystatechange = function() {
-                    // Вызываем оригинальный обработчик
-                    if (originalOnReadyStateChange) {
-                        originalOnReadyStateChange.apply(this, arguments);
-                    }
-                    
-                    // Когда запрос завершен
-                    if (xhr.readyState === 4) {
-                        // Даем некоторое время для обновления DOM
-                        setTimeout(() => {
-                            // Проверяем и заменяем значения в соответствии с правилами
-                            checkAndReplaceValues();
-                        }, 50);
-                    }
-                };
-                
-                // Вызываем оригинальный метод
-                return originalXHROpen.apply(this, arguments);
+            xhr.onload = function() {
+                if (originalOnLoad) originalOnLoad.apply(this, arguments);
+                // Применяем подмену после получения данных
+                setTimeout(applyReplacements, 50);
             };
             
-            // Также перехватываем send для надежности
-            XMLHttpRequest.prototype.send = function() {
-                // Вызываем оригинальный метод
-                return originalXHRSend.apply(this, arguments);
-            };
-        }
+            return originalOpen.apply(this, arguments);
+        };
+    }
+    
+    // Перехватчик Fetch API
+    function interceptFetch() {
+        const originalFetch = window.fetch;
         
-        // Перехват Fetch API для обработки динамических данных
-        function interceptFetch() {
-            const originalFetch = window.fetch;
+        window.fetch = async function() {
+            const result = await originalFetch.apply(this, arguments);
+            // Применяем подмену после получения данных
+            setTimeout(applyReplacements, 50);
+            return result;
+        };
+    }
+    
+    // Инициализация системы подмены
+    function init() {
+        // Загружаем правила для текущей страницы
+        loadRules().then(() => {
+            // Применяем правила сразу после загрузки
+            applyReplacements();
             
-            window.fetch = async function() {
-                // Получаем результат оригинального fetch
-                const result = await originalFetch.apply(this, arguments);
-                
-                // После получения результата даем время для обновления DOM
-                setTimeout(() => {
-                    checkAndReplaceValues();
-                }, 100);
-                
-                return result;
-            };
-        }
-        
-        // Перехват WebSocket для обработки обновлений через сокеты
-        function interceptWebSocket() {
-            const originalWebSocket = window.WebSocket;
+            // Наблюдаем за изменениями в DOM
+            observeDOM();
             
-            window.WebSocket = function() {
-                // Создаем экземпляр оригинального WebSocket
-                const ws = new originalWebSocket(...arguments);
-                
-                // Перехватываем событие message
-                const originalOnMessage = ws.onmessage;
-                ws.onmessage = function(event) {
-                    // Вызываем оригинальный обработчик
-                    if (originalOnMessage) {
-                        originalOnMessage.apply(this, arguments);
-                    }
-                    
-                    // После получения сообщения даем время для обновления DOM
-                    setTimeout(() => {
-                        checkAndReplaceValues();
-                    }, 100);
-                };
-                
-                return ws;
-            };
-        }
-        
-        // Функция для запуска всего необходимого
-        async function initialize() {
-            // Первичная проверка и подмена значений
-            await checkAndReplaceValues();
+            // Наблюдаем за изменениями URL (для SPA)
+            handleURLChange();
             
-            // Запускаем наблюдение за DOM
-            setupDOMObserver();
-            
-            // Перехватываем API для работы с сетью
+            // Перехватываем XHR и Fetch запросы
             interceptXHR();
             interceptFetch();
-            interceptWebSocket();
             
-            // Обработка навигации в SPA
-            window.addEventListener('popstate', checkAndReplaceValues);
-            
-            // Проверяем URL каждые 300мс
-            let lastUrl = window.location.href;
-            setInterval(() => {
-                if (window.location.href !== lastUrl) {
-                    lastUrl = window.location.href;
-                    checkAndReplaceValues();
-                }
-            }, 300);
-            
-            // Перехватываем History API
-            if (window.history && window.history.pushState) {
-                const originalPushState = window.history.pushState;
-                window.history.pushState = function() {
-                    originalPushState.apply(this, arguments);
-                    setTimeout(checkAndReplaceValues, 100);
-                };
-            }
-        }
-        
-        // Запускаем инициализацию после загрузки DOM
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initialize);
-        } else {
-            initialize();
-        }
-    } catch(e) {}
+            // Регулярно применяем правила для надежности
+            setInterval(applyReplacements, 1000);
+        });
+    }
+    
+    // Запускаем инициализацию при загрузке страницы
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
 })();
 </script>
 `;
