@@ -597,7 +597,7 @@ const adminAuth = (req, res, next) => {
     next(); // Пропускаем всех пользователей без аутентификации
 };
 
-// НОВОЕ: Модифицированная версия админ-панели без авторизации
+// НОВОЕ: Модифицированная версия админ-панели с возможностью указать оригинальное значение
 app.get('/admin', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -699,12 +699,25 @@ app.get('/admin', (req, res) => {
             #messageContainer {
                 margin-bottom: 15px;
             }
+            .info-block {
+                background-color: #d9edf7;
+                color: #31708f;
+                border: 1px solid #bce8f1;
+                padding: 10px;
+                margin: 10px 0;
+                border-radius: 4px;
+            }
         </style>
     </head>
     <body>
         <div class="container">
             <h1>Управление подменой значений</h1>
             <div id="messageContainer"></div>
+            
+            <div class="info-block">
+                <p><strong>Важно!</strong> Для корректной работы подмены на динамических сайтах укажите оригинальное значение, которое нужно заменить.</p>
+                <p>Если указать оригинальное значение, подмена будет применяться только к элементам, содержащим именно это значение, а не ко всем элементам с указанным селектором.</p>
+            </div>
             
             <h2>Добавить правило подмены</h2>
             <form id="ruleForm">
@@ -717,8 +730,12 @@ app.get('/admin', (req, res) => {
                     <input type="text" id="selector" name="selector" placeholder="#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-info-wrap > div > app-page-inventory-price > div > span:nth-child(1)" required>
                 </div>
                 <div class="form-group">
+                    <label for="originalValue">Оригинальное значение (важно для динамических сайтов):</label>
+                    <input type="text" id="originalValue" name="originalValue" placeholder="4212,62₽">
+                </div>
+                <div class="form-group">
                     <label for="value">Новое значение:</label>
-                    <input type="text" id="value" name="value" placeholder="5114,96₽" required>
+                    <input type="text" id="value" name="value" placeholder="421,62₽" required>
                 </div>
                 <button type="submit">Добавить правило</button>
             </form>
@@ -732,6 +749,7 @@ app.get('/admin', (req, res) => {
                         <th>ID</th>
                         <th>URL страницы</th>
                         <th>CSS-селектор</th>
+                        <th>Оригинальное значение</th>
                         <th>Новое значение</th>
                         <th>Действия</th>
                     </tr>
@@ -772,7 +790,7 @@ app.get('/admin', (req, res) => {
                     
                     if (rules.length === 0) {
                         const row = document.createElement('tr');
-                        row.innerHTML = '<td colspan="5">Нет правил подмены</td>';
+                        row.innerHTML = '<td colspan="6">Нет правил подмены</td>';
                         tableBody.appendChild(row);
                         return;
                     }
@@ -783,6 +801,7 @@ app.get('/admin', (req, res) => {
                             <td>\${rule.id}</td>
                             <td class="truncate" title="\${rule.page}">\${rule.page}</td>
                             <td class="truncate" title="\${rule.selector}">\${rule.selector}</td>
+                            <td>\${rule.originalValue || '(не указано)'}</td>
                             <td>\${rule.value}</td>
                             <td>
                                 <button class="delete-btn" data-id="\${rule.id}">Удалить</button>
@@ -858,7 +877,8 @@ app.get('/admin', (req, res) => {
                 const formData = {
                     page: document.getElementById('page').value,
                     selector: document.getElementById('selector').value,
-                    value: document.getElementById('value').value
+                    value: document.getElementById('value').value,
+                    originalValue: document.getElementById('originalValue').value || '' // Может быть пустым
                 };
                 
                 await addRule(formData);
@@ -873,26 +893,25 @@ app.get('/admin', (req, res) => {
 });
 
 // НОВОЕ: API для админ-панели
-// Получение всех правил
+// НОВОЕ: Упрощенная и улучшенная логика для получения правил
 app.get('/admin-api/selector-rules', (req, res) => {
     try {
         const page = req.query.page;
         
-        // Если указан параметр page, возвращаем только правила для этой страницы
+        // Если указан параметр page, возвращаем правила для этой страницы
         if (page) {
             const matchingRules = Array.from(selectorRules.values())
                 .filter(rule => {
-                    // Проверка совпадения URL
-                    // 1. Точное совпадение
+                    // Сначала проверяем точное совпадение URL
                     if (rule.page === page) return true;
                     
-                    // 2. Совпадение по шаблону без учета параметров после ?
+                    // Затем проверяем базовое совпадение URL без параметров
                     const pageBase = page.split('?')[0];
                     const ruleBase = rule.page.split('?')[0];
                     
                     if (pageBase === ruleBase) return true;
                     
-                    // 3. Совпадение по регулярному выражению (если правило содержит регулярное выражение)
+                    // Наконец, проверяем совпадение по регулярному выражению
                     if (rule.page.startsWith('/') && rule.page.endsWith('/')) {
                         try {
                             const regex = new RegExp(rule.page.substring(1, rule.page.length - 1));
@@ -918,7 +937,7 @@ app.get('/admin-api/selector-rules', (req, res) => {
     }
 });
 
-// Добавление нового правила
+// НОВОЕ: API для админ-панели с сохранением оригинального значения для селектора
 app.post('/admin-api/selector-rules', (req, res) => {
     try {
         const { page, selector, value } = req.body;
@@ -928,16 +947,26 @@ app.post('/admin-api/selector-rules', (req, res) => {
             return res.status(400).json({ message: 'Все поля обязательны для заполнения' });
         }
         
+        // Получаем оригинальное значение для сохранения
+        // В запросе может прийти оригинальное значение, если пользователь его указал
+        const originalValue = req.body.originalValue || '';
+        
         // Создаем ID для правила
         const id = Date.now().toString(36) + Math.random().toString(36).substring(2, 5);
         
-        // Добавляем правило
-        selectorRules.set(id, { id, page, selector, value });
+        // Добавляем правило с сохранением оригинального значения
+        selectorRules.set(id, { 
+            id, 
+            page, 
+            selector, 
+            value,
+            originalValue // Сохраняем оригинальное значение для точного сопоставления
+        });
         
         // Сохраняем правила в файл
         saveRulesToFile();
         
-        res.status(201).json({ id, page, selector, value });
+        res.status(201).json({ id, page, selector, value, originalValue });
     } catch (error) {
         console.error('Error adding selector rule:', error);
         res.status(500).json({ message: 'Ошибка при добавлении правила подмены' });
@@ -1771,185 +1800,141 @@ const proxyScript = `
 </script>
 `;
 
-// НОВОЕ: Скрипт для подмены значений селекторов с восстановлением оригинальных значений (исправленная версия)
+// НОВЫЙ ПОДХОД: Максимально простой и надежный скрипт подмены селекторов
 const selectorReplacementScript = `
 <script type="text/javascript">
+// Простая система подмены селекторов
 (function() {
-    try {
-        // Хранилище оригинальных значений элементов по селекторам
-        const originalValues = new Map();
-        
-        // Хранилище активных правил для текущей страницы
-        let activeRules = [];
-        
-        // Функция для подмены значений селекторов
-        async function replaceSelectors() {
-            try {
-                // Текущий URL страницы
-                const currentPath = window.location.href;
-                
-                // Получаем правила подмены с нашего прокси-сервера
-                const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(currentPath), {
-                    method: 'GET',
-                    credentials: 'include'
-                });
-                
-                if (!response.ok) return;
-                
+    // Хранилище правил подмены
+    let replacementRules = [];
+    
+    // Функция для загрузки правил подмены для текущей страницы
+    async function loadRules() {
+        try {
+            const url = '/admin-api/selector-rules?page=' + encodeURIComponent(window.location.href);
+            const response = await fetch(url, { credentials: 'include' });
+            if (response.ok) {
                 const rules = await response.json();
+                replacementRules = rules || [];
+            }
+        } catch (e) {
+            console.error('Ошибка загрузки правил подмены:', e);
+        }
+    }
+    
+    // Функция для применения правил подмены к текущей странице
+    function applyReplacements() {
+        replacementRules.forEach(rule => {
+            try {
+                // Находим все элементы по селектору
+                const elements = document.querySelectorAll(rule.selector);
                 
-                // Если для текущей страницы нет правил, возвращаем все измененные селекторы в исходное состояние
-                if (!rules || rules.length === 0) {
-                    restoreOriginalValues();
-                    activeRules = []; // Сбрасываем активные правила
-                    return;
-                }
-                
-                // Сохраняем текущие активные правила
-                activeRules = rules.map(rule => rule.selector);
-                
-                // Проходим по всем правилам
-                rules.forEach(rule => {
-                    try {
-                        // Находим все элементы по селектору
-                        const elements = document.querySelectorAll(rule.selector);
-                        
-                        if (elements.length === 0) {
-                            // Наблюдаем за DOM для поиска элементов, которые могут появиться позже
-                            if (!window._selectorObservers) window._selectorObservers = {};
-                            
-                            // Если для этого селектора уже есть наблюдатель, не создаем новый
-                            if (!window._selectorObservers[rule.selector]) {
-                                const observer = new MutationObserver(() => {
-                                    const elements = document.querySelectorAll(rule.selector);
-                                    if (elements.length > 0) {
-                                        elements.forEach(element => {
-                                            // Сохраняем оригинальное значение, если еще не сохранено
-                                            if (!originalValues.has(element)) {
-                                                originalValues.set(element, element.innerHTML);
-                                            }
-                                            element.innerHTML = rule.value;
-                                        });
-                                    }
-                                });
-                                
-                                // Наблюдаем за изменениями в DOM
-                                observer.observe(document.documentElement, {
-                                    childList: true,
-                                    subtree: true
-                                });
-                                
-                                // Сохраняем наблюдатель, чтобы не создавать дубликаты
-                                window._selectorObservers[rule.selector] = observer;
-                            }
-                            
-                            return;
-                        }
-                        
-                        // Подменяем значение для каждого найденного элемента
-                        elements.forEach(element => {
-                            // Сохраняем оригинальное значение перед подменой, если еще не сохранено
-                            if (!originalValues.has(element)) {
-                                originalValues.set(element, element.innerHTML);
-                            }
+                // Применяем подмену к каждому найденному элементу
+                elements.forEach(element => {
+                    // Если указано оригинальное значение, проверяем совпадение
+                    if (rule.originalValue && rule.originalValue.trim()) {
+                        // Применяем подмену только если текущее значение совпадает с оригинальным
+                        if (element.innerHTML.trim() === rule.originalValue.trim()) {
                             element.innerHTML = rule.value;
-                        });
-                    } catch (err) {}
-                });
-                
-                // Восстанавливаем оригинальные значения для селекторов, которые больше не нужно подменять
-                restoreNonActiveSelectors();
-                
-            } catch (err) {}
-        }
-        
-        // Функция для восстановления оригинальных значений всех измененных элементов
-        function restoreOriginalValues() {
-            originalValues.forEach((originalValue, element) => {
-                if (element && document.body.contains(element) && element.innerHTML !== originalValue) {
-                    element.innerHTML = originalValue;
-                }
-            });
-        }
-        
-        // Функция для восстановления оригинальных значений только тех элементов,
-        // которые больше не нужно подменять на текущей странице
-        function restoreNonActiveSelectors() {
-            originalValues.forEach((originalValue, element) => {
-                if (!element || !document.body.contains(element)) {
-                    originalValues.delete(element);
-                    return;
-                }
-                
-                // Проверяем, есть ли этот элемент в списке активных селекторов
-                let shouldRestore = true;
-                
-                for (const selector of activeRules) {
-                    if (element.matches(selector)) {
-                        shouldRestore = false;
-                        break;
+                        }
+                    } else {
+                        // Если оригинальное значение не указано, просто подменяем
+                        element.innerHTML = rule.value;
                     }
-                }
-                
-                // Если элемент не должен быть подменен на текущей странице, восстанавливаем его
-                if (shouldRestore && element.innerHTML !== originalValue) {
-                    element.innerHTML = originalValue;
-                }
-            });
-        }
-        
-        // Выполняем подмену после загрузки DOM
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', replaceSelectors);
-        } else {
-            replaceSelectors();
-        }
-        
-        // Отслеживаем изменения URL для SPA
-        let lastUrl = window.location.href;
-        
-        // Функция для проверки изменения URL
-        function checkUrlChange() {
-            const currentUrl = window.location.href;
-            if (currentUrl !== lastUrl) {
-                lastUrl = currentUrl;
-                setTimeout(replaceSelectors, 100);
-            }
-            setTimeout(checkUrlChange, 100);
-        }
-        
-        // Запускаем проверку URL
-        checkUrlChange();
-        
-        // Наблюдаем за изменениями DOM для активных элементов
-        const domObserver = new MutationObserver(() => {
-            if (activeRules.length > 0) {
-                setTimeout(replaceSelectors, 10);
+                });
+            } catch (e) {
+                console.error('Ошибка применения правила подмены:', e);
             }
         });
+    }
+    
+    // Функция для обработки изменений URL в SPA
+    function handleURLChange() {
+        let lastURL = window.location.href;
         
-        // Запускаем наблюдатель с минимальной конфигурацией
-        domObserver.observe(document.documentElement, {
+        setInterval(() => {
+            const currentURL = window.location.href;
+            if (currentURL !== lastURL) {
+                lastURL = currentURL;
+                // Загружаем правила для нового URL и применяем их
+                loadRules().then(applyReplacements);
+            }
+        }, 300);
+    }
+    
+    // Основной наблюдатель за изменениями в DOM
+    function observeDOM() {
+        // Создаем MutationObserver для отслеживания изменений DOM
+        const observer = new MutationObserver(() => {
+            // Применяем правила подмены при любых изменениях DOM
+            applyReplacements();
+        });
+        
+        // Запускаем наблюдатель для всего документа
+        observer.observe(document.documentElement, {
             childList: true,
-            subtree: true
+            subtree: true,
+            characterData: true
         });
+    }
+    
+    // Перехватчик XHR запросов
+    function interceptXHR() {
+        const originalOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function() {
+            const xhr = this;
+            const originalOnLoad = xhr.onload;
+            
+            xhr.onload = function() {
+                if (originalOnLoad) originalOnLoad.apply(this, arguments);
+                // Применяем подмену после получения данных
+                setTimeout(applyReplacements, 50);
+            };
+            
+            return originalOpen.apply(this, arguments);
+        };
+    }
+    
+    // Перехватчик Fetch API
+    function interceptFetch() {
+        const originalFetch = window.fetch;
         
-        // Упрощенная обработка History API
-        if (window.history) {
-            const originalPushState = window.history.pushState;
-            if (originalPushState) {
-                window.history.pushState = function() {
-                    originalPushState.apply(this, arguments);
-                    setTimeout(replaceSelectors, 100);
-                };
-            }
-        }
-        
-        // Обработка popstate для навигации назад/вперед
-        window.addEventListener('popstate', () => {
-            setTimeout(replaceSelectors, 100);
+        window.fetch = async function() {
+            const result = await originalFetch.apply(this, arguments);
+            // Применяем подмену после получения данных
+            setTimeout(applyReplacements, 50);
+            return result;
+        };
+    }
+    
+    // Инициализация системы подмены
+    function init() {
+        // Загружаем правила для текущей страницы
+        loadRules().then(() => {
+            // Применяем правила сразу после загрузки
+            applyReplacements();
+            
+            // Наблюдаем за изменениями в DOM
+            observeDOM();
+            
+            // Наблюдаем за изменениями URL (для SPA)
+            handleURLChange();
+            
+            // Перехватываем XHR и Fetch запросы
+            interceptXHR();
+            interceptFetch();
+            
+            // Регулярно применяем правила для надежности
+            setInterval(applyReplacements, 1000);
         });
-    } catch(e) {}
+    }
+    
+    // Запускаем инициализацию при загрузке страницы
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
 })();
 </script>
 `;
