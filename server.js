@@ -1012,8 +1012,140 @@ setInterval(() => {
     }
 }, 60 * 1000); // Проверка каждую минуту
 
+// ИСПРАВЛЕНО: Улучшенная обработка GraphQL запросов с повторными попытками
+app.post('/api/graphql', async (req, res) => {
+    try {
+        const targetUrl = TARGET_HOST + '/api/graphql';
+        const baseUrl = getBaseUrl(req);
+        const sessionId = req.cookies.sessionId || Math.random().toString(36).substring(7);
+        const session = getSession(sessionId);
+        
+        // Собираем cookies для запроса
+        const requestCookies = new Map([
+            ...session.cookies,
+            ...parseCookieHeader(req.headers.cookie)
+        ]);
+        
+        console.log(`📊 GraphQL: ${req.method} ${req.originalUrl}`);
+        
+        // ИСПРАВЛЕНО: Улучшенные заголовки для GraphQL
+        const axiosConfig = {
+            method: req.method,
+            url: targetUrl,
+            headers: {
+                ...req.headers,
+                'host': 'market.csgo.com',
+                'origin': 'https://market.csgo.com',
+                'referer': 'https://market.csgo.com/',
+                'content-type': 'application/json',
+                'accept': 'application/json',
+                'accept-language': 'en-US,en;q=0.9',
+                'user-agent': req.headers['user-agent'] || 'Mozilla/5.0',
+                'cookie': createCookieString(requestCookies),
+                'connection': 'keep-alive'
+            },
+            data: req.body,
+            responseType: 'json',
+            validateStatus: () => true, // Принимаем любой статус ответа
+            maxRedirects: 0,
+            timeout: 30000,
+            httpsAgent: httpsAgent
+        };
+        
+        // Удаляем заголовки прокси
+        delete axiosConfig.headers['x-forwarded-for'];
+        delete axiosConfig.headers['x-forwarded-proto'];
+        delete axiosConfig.headers['x-forwarded-host'];
+        
+        // ИСПРАВЛЕНО: Добавляем повторные попытки для GraphQL запросов
+        let retries = 0;
+        const maxRetries = 3;
+        let response = null;
+        let lastError = null;
+        
+        while (retries < maxRetries) {
+            try {
+                if (retries > 0) {
+                    console.log(`GraphQL retry ${retries}/${maxRetries} for ${req.originalUrl}`);
+                    await new Promise(resolve => setTimeout(resolve, 1000 * retries)); // Увеличивающаяся задержка
+                }
+                
+                response = await axios(axiosConfig);
+                
+                // Если успешно, выходим из цикла
+                if (response.status !== 500) {
+                    break;
+                }
+                
+                console.warn(`GraphQL returned 500, retry ${retries + 1}/${maxRetries}`);
+                retries++;
+                
+            } catch (error) {
+                console.error(`GraphQL request failed (attempt ${retries + 1}/${maxRetries}):`, error.message);
+                lastError = error;
+                retries++;
+                
+                if (retries >= maxRetries) {
+                    throw error;
+                }
+            }
+        }
+        
+        // Если не смогли получить ответ после всех попыток
+        if (!response) {
+            throw lastError || new Error('Failed after max retries');
+        }
+        
+        // Сохраняем cookies из ответа
+        if (response.headers['set-cookie']) {
+            const newCookies = parseSetCookieHeaders(response.headers['set-cookie']);
+            newCookies.forEach((value, name) => {
+                session.cookies.set(name, value);
+            });
+        }
+        
+        // Устанавливаем sessionId cookie если её нет
+        if (!req.cookies.sessionId) {
+            res.cookie('sessionId', sessionId, { 
+                httpOnly: true, 
+                secure: isSecure(req),
+                sameSite: isSecure(req) ? 'none' : 'lax'
+            });
+        }
+        
+        // Устанавливаем заголовки
+        Object.entries(response.headers).forEach(([key, value]) => {
+            if (!['content-encoding', 'content-length', 'transfer-encoding'].includes(key.toLowerCase())) {
+                res.set(key, value);
+            }
+        });
+        
+        // ИСПРАВЛЕНО: Специальная обработка GraphQL ошибок
+        if (response.data && response.data.errors) {
+            console.warn('GraphQL responded with errors:', JSON.stringify(response.data.errors));
+            
+            // Если это ошибка viewItem - возвращаем пустой результат вместо ошибки
+            if (JSON.stringify(response.data.errors).includes('viewItem')) {
+                console.log('Replacing viewItem error with empty response');
+                response.data = { data: { viewItem: null } };
+            }
+        }
+        
+        res.status(response.status);
+        res.json(response.data);
+        
+    } catch (error) {
+        console.error('❌ GraphQL error:', error.message);
+        // Возвращаем клиенту обобщенный ответ с пустыми данными
+        res.status(200).json({ 
+            data: {},
+            errors: [{ message: 'GraphQL proxy error, please retry' }]
+        });
+    }
+});
+
 // ИСПРАВЛЕНО: Улучшен основной обработчик HTTP запросов с повторными попытками
-app.use('*', async (req, res, next) => {
+app.use('*', async (req, res) => {
     try {
         const baseUrl = getBaseUrl(req);
         const targetUrl = TARGET_HOST + req.originalUrl;
@@ -1206,138 +1338,6 @@ app.use('*', async (req, res, next) => {
     }
 });
 
-// ИСПРАВЛЕНО: Улучшенная обработка GraphQL запросов с повторными попытками
-app.post('/api/graphql', async (req, res) => {
-    try {
-        const targetUrl = TARGET_HOST + '/api/graphql';
-        const baseUrl = getBaseUrl(req);
-        const sessionId = req.cookies.sessionId || Math.random().toString(36).substring(7);
-        const session = getSession(sessionId);
-        
-        // Собираем cookies для запроса
-        const requestCookies = new Map([
-            ...session.cookies,
-            ...parseCookieHeader(req.headers.cookie)
-        ]);
-        
-        console.log(`📊 GraphQL: ${req.method} ${req.originalUrl}`);
-        
-        // ИСПРАВЛЕНО: Улучшенные заголовки для GraphQL
-        const axiosConfig = {
-            method: req.method,
-            url: targetUrl,
-            headers: {
-                ...req.headers,
-                'host': 'market.csgo.com',
-                'origin': 'https://market.csgo.com',
-                'referer': 'https://market.csgo.com/',
-                'content-type': 'application/json',
-                'accept': 'application/json',
-                'accept-language': 'en-US,en;q=0.9',
-                'user-agent': req.headers['user-agent'] || 'Mozilla/5.0',
-                'cookie': createCookieString(requestCookies),
-                'connection': 'keep-alive'
-            },
-            data: req.body,
-            responseType: 'json',
-            validateStatus: () => true, // Принимаем любой статус ответа
-            maxRedirects: 0,
-            timeout: 30000,
-            httpsAgent: httpsAgent
-        };
-        
-        // Удаляем заголовки прокси
-        delete axiosConfig.headers['x-forwarded-for'];
-        delete axiosConfig.headers['x-forwarded-proto'];
-        delete axiosConfig.headers['x-forwarded-host'];
-        
-        // ИСПРАВЛЕНО: Добавляем повторные попытки для GraphQL запросов
-        let retries = 0;
-        const maxRetries = 3;
-        let response = null;
-        let lastError = null;
-        
-        while (retries < maxRetries) {
-            try {
-                if (retries > 0) {
-                    console.log(`GraphQL retry ${retries}/${maxRetries} for ${req.originalUrl}`);
-                    await new Promise(resolve => setTimeout(resolve, 1000 * retries)); // Увеличивающаяся задержка
-                }
-                
-                response = await axios(axiosConfig);
-                
-                // Если успешно, выходим из цикла
-                if (response.status !== 500) {
-                    break;
-                }
-                
-                console.warn(`GraphQL returned 500, retry ${retries + 1}/${maxRetries}`);
-                retries++;
-                
-            } catch (error) {
-                console.error(`GraphQL request failed (attempt ${retries + 1}/${maxRetries}):`, error.message);
-                lastError = error;
-                retries++;
-                
-                if (retries >= maxRetries) {
-                    throw error;
-                }
-            }
-        }
-        
-        // Если не смогли получить ответ после всех попыток
-        if (!response) {
-            throw lastError || new Error('Failed after max retries');
-        }
-        
-        // Сохраняем cookies из ответа
-        if (response.headers['set-cookie']) {
-            const newCookies = parseSetCookieHeaders(response.headers['set-cookie']);
-            newCookies.forEach((value, name) => {
-                session.cookies.set(name, value);
-            });
-        }
-        
-        // Устанавливаем sessionId cookie если её нет
-        if (!req.cookies.sessionId) {
-            res.cookie('sessionId', sessionId, { 
-                httpOnly: true, 
-                secure: isSecure(req),
-                sameSite: isSecure(req) ? 'none' : 'lax'
-            });
-        }
-        
-        // Устанавливаем заголовки
-        Object.entries(response.headers).forEach(([key, value]) => {
-            if (!['content-encoding', 'content-length', 'transfer-encoding'].includes(key.toLowerCase())) {
-                res.set(key, value);
-            }
-        });
-        
-        // ИСПРАВЛЕНО: Специальная обработка GraphQL ошибок
-        if (response.data && response.data.errors) {
-            console.warn('GraphQL responded with errors:', JSON.stringify(response.data.errors));
-            
-            // Если это ошибка viewItem - возвращаем пустой результат вместо ошибки
-            if (JSON.stringify(response.data.errors).includes('viewItem')) {
-                console.log('Replacing viewItem error with empty response');
-                response.data = { data: { viewItem: null } };
-            }
-        }
-        
-        res.status(response.status);
-        res.json(response.data);
-        
-    } catch (error) {
-        console.error('❌ GraphQL error:', error.message);
-        // Возвращаем клиенту обобщенный ответ с пустыми данными
-        res.status(200).json({ 
-            data: {},
-            errors: [{ message: 'GraphQL proxy error, please retry' }]
-        });
-    }
-});
-
 // Добавлена периодическая очистка устаревших сессий
 setInterval(() => {
     const now = Date.now();
@@ -1358,7 +1358,7 @@ setInterval(() => {
 // Запуск сервера
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    🚀 Market Proxy Server 
+    🚀 Market Proxy Server
     📡 Port: ${PORT}
     🎯 Target: ${TARGET_HOST}
     🔌 WebSocket: ${WS_TARGET}
