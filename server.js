@@ -1800,141 +1800,215 @@ const proxyScript = `
 </script>
 `;
 
-// НОВЫЙ ПОДХОД: Максимально простой и надежный скрипт подмены селекторов
+// АГРЕССИВНАЯ СИСТЕМА ПОДМЕНЫ для SPA с динамической загрузкой
 const selectorReplacementScript = `
 <script type="text/javascript">
-// Простая система подмены селекторов
+// Система подмены для SPA с динамической загрузкой
 (function() {
-    // Хранилище правил подмены
     let replacementRules = [];
+    let isActive = false;
+    let currentURL = window.location.href;
     
-    // Функция для загрузки правил подмены для текущей страницы
+    // Функция для загрузки правил подмены
     async function loadRules() {
         try {
-            const url = '/admin-api/selector-rules?page=' + encodeURIComponent(window.location.href);
-            const response = await fetch(url, { credentials: 'include' });
+            const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(currentURL), {
+                method: 'GET',
+                credentials: 'include'
+            });
+            
             if (response.ok) {
                 const rules = await response.json();
                 replacementRules = rules || [];
+                console.log('Загружено правил подмены:', replacementRules.length);
+                return true;
             }
         } catch (e) {
-            console.error('Ошибка загрузки правил подмены:', e);
+            console.error('Ошибка загрузки правил:', e);
         }
+        return false;
     }
     
-    // Функция для применения правил подмены к текущей странице
+    // Функция для применения правил подмены
     function applyReplacements() {
+        if (!replacementRules.length) return;
+        
         replacementRules.forEach(rule => {
             try {
-                // Находим все элементы по селектору
                 const elements = document.querySelectorAll(rule.selector);
                 
-                // Применяем подмену к каждому найденному элементу
                 elements.forEach(element => {
-                    // Если указано оригинальное значение, проверяем совпадение
+                    // Проверяем, нужно ли применять правило
+                    let shouldReplace = false;
+                    
                     if (rule.originalValue && rule.originalValue.trim()) {
-                        // Применяем подмену только если текущее значение совпадает с оригинальным
+                        // Если указано оригинальное значение, проверяем совпадение
                         if (element.innerHTML.trim() === rule.originalValue.trim()) {
-                            element.innerHTML = rule.value;
+                            shouldReplace = true;
                         }
                     } else {
-                        // Если оригинальное значение не указано, просто подменяем
+                        // Если оригинальное значение не указано, всегда подменяем
+                        shouldReplace = true;
+                    }
+                    
+                    if (shouldReplace) {
                         element.innerHTML = rule.value;
+                        console.log('Подменено значение:', rule.selector, '->', rule.value);
                     }
                 });
             } catch (e) {
-                console.error('Ошибка применения правила подмены:', e);
+                console.error('Ошибка применения правила:', e);
             }
         });
     }
     
-    // Функция для обработки изменений URL в SPA
-    function handleURLChange() {
-        let lastURL = window.location.href;
-        
-        setInterval(() => {
-            const currentURL = window.location.href;
-            if (currentURL !== lastURL) {
-                lastURL = currentURL;
-                // Загружаем правила для нового URL и применяем их
-                loadRules().then(applyReplacements);
+    // Агрессивный наблюдатель за DOM
+    function startDOMObserver() {
+        const observer = new MutationObserver((mutations) => {
+            let hasChanges = false;
+            
+            mutations.forEach(mutation => {
+                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                    hasChanges = true;
+                } else if (mutation.type === 'characterData') {
+                    hasChanges = true;
+                }
+            });
+            
+            if (hasChanges) {
+                // Применяем правила немедленно и еще раз через короткий интервал
+                applyReplacements();
+                setTimeout(applyReplacements, 10);
+                setTimeout(applyReplacements, 50);
+                setTimeout(applyReplacements, 100);
             }
-        }, 300);
-    }
-    
-    // Основной наблюдатель за изменениями в DOM
-    function observeDOM() {
-        // Создаем MutationObserver для отслеживания изменений DOM
-        const observer = new MutationObserver(() => {
-            // Применяем правила подмены при любых изменениях DOM
-            applyReplacements();
         });
         
-        // Запускаем наблюдатель для всего документа
         observer.observe(document.documentElement, {
             childList: true,
             subtree: true,
-            characterData: true
+            characterData: true,
+            attributes: false
         });
+        
+        console.log('DOM Observer запущен');
     }
     
-    // Перехватчик XHR запросов
-    function interceptXHR() {
-        const originalOpen = XMLHttpRequest.prototype.open;
+    // Перехват всех сетевых запросов
+    function interceptNetworkRequests() {
+        // Перехват XMLHttpRequest
+        const originalXHROpen = XMLHttpRequest.prototype.open;
         XMLHttpRequest.prototype.open = function() {
             const xhr = this;
-            const originalOnLoad = xhr.onload;
             
-            xhr.onload = function() {
-                if (originalOnLoad) originalOnLoad.apply(this, arguments);
-                // Применяем подмену после получения данных
+            xhr.addEventListener('load', function() {
+                // Применяем правила после загрузки данных
                 setTimeout(applyReplacements, 50);
-            };
+                setTimeout(applyReplacements, 200);
+                setTimeout(applyReplacements, 500);
+            });
             
-            return originalOpen.apply(this, arguments);
+            return originalXHROpen.apply(this, arguments);
         };
-    }
-    
-    // Перехватчик Fetch API
-    function interceptFetch() {
-        const originalFetch = window.fetch;
         
+        // Перехват Fetch API
+        const originalFetch = window.fetch;
         window.fetch = async function() {
             const result = await originalFetch.apply(this, arguments);
-            // Применяем подмену после получения данных
+            
+            // Применяем правила после fetch запроса
             setTimeout(applyReplacements, 50);
+            setTimeout(applyReplacements, 200);
+            setTimeout(applyReplacements, 500);
+            
             return result;
         };
+        
+        console.log('Перехват сетевых запросов установлен');
+    }
+    
+    // Отслеживание изменений URL
+    function trackURLChanges() {
+        // Проверяем URL каждые 100мс
+        setInterval(() => {
+            const newURL = window.location.href;
+            if (newURL !== currentURL) {
+                console.log('URL изменился:', currentURL, '->', newURL);
+                currentURL = newURL;
+                
+                // Перезагружаем правила для нового URL
+                loadRules().then(() => {
+                    // Применяем новые правила несколько раз
+                    applyReplacements();
+                    setTimeout(applyReplacements, 100);
+                    setTimeout(applyReplacements, 300);
+                    setTimeout(applyReplacements, 500);
+                    setTimeout(applyReplacements, 1000);
+                });
+            }
+        }, 100);
+        
+        // Также отслеживаем события popstate
+        window.addEventListener('popstate', () => {
+            setTimeout(() => {
+                currentURL = window.location.href;
+                loadRules().then(applyReplacements);
+            }, 50);
+        });
+        
+        console.log('Отслеживание URL запущено');
+    }
+    
+    // Регулярное применение правил для надежности
+    function startRegularReplacement() {
+        // Применяем правила каждые 500мс
+        setInterval(() => {
+            if (replacementRules.length > 0) {
+                applyReplacements();
+            }
+        }, 500);
+        
+        console.log('Регулярное применение правил запущено');
     }
     
     // Инициализация системы подмены
-    function init() {
+    async function initialize() {
+        console.log('Инициализация системы подмены селекторов...');
+        
         // Загружаем правила для текущей страницы
-        loadRules().then(() => {
-            // Применяем правила сразу после загрузки
+        const rulesLoaded = await loadRules();
+        
+        if (rulesLoaded) {
+            // Сразу применяем правила несколько раз
             applyReplacements();
+            setTimeout(applyReplacements, 100);
+            setTimeout(applyReplacements, 300);
+            setTimeout(applyReplacements, 500);
+            setTimeout(applyReplacements, 1000);
+            setTimeout(applyReplacements, 2000);
             
-            // Наблюдаем за изменениями в DOM
-            observeDOM();
+            // Запускаем все системы мониторинга
+            startDOMObserver();
+            interceptNetworkRequests();
+            trackURLChanges();
+            startRegularReplacement();
             
-            // Наблюдаем за изменениями URL (для SPA)
-            handleURLChange();
-            
-            // Перехватываем XHR и Fetch запросы
-            interceptXHR();
-            interceptFetch();
-            
-            // Регулярно применяем правила для надежности
-            setInterval(applyReplacements, 1000);
-        });
+            isActive = true;
+            console.log('Система подмены активирована');
+        } else {
+            console.log('Правила подмены не найдены');
+        }
     }
     
-    // Запускаем инициализацию при загрузке страницы
+    // Запуск инициализации
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
+        document.addEventListener('DOMContentLoaded', initialize);
     } else {
-        init();
+        initialize();
     }
+    
+    // Дополнительная инициализация через 1 секунду для надежности
+    setTimeout(initialize, 1000);
 })();
 </script>
 `;
