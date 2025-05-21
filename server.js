@@ -9,7 +9,7 @@ const https = require('https');
 const path = require('path');
 const fs = require('fs');
 const bodyParser = require('body-parser'); // Добавлен для обработки форм в админке
-const basicAuth = require('express-basic-auth'); // Добавлен для базовой авторизации
+// Убрана зависимость basic-auth по требованию заказчика
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1173,11 +1173,10 @@ setInterval(() => {
 
 // НОВОЕ: Настройки аутентификации для админ-панели
 // Используем простую базовую аутентификацию
-const adminAuth = basicAuth({
-    users: { 'admin': 'csgo2024market' }, // Простой пароль для демонстрации
-    challenge: true,
-    realm: 'Admin Panel'
-});
+// Убрана аутентификация по требованию заказчика
+const adminAuth = (req, res, next) => {
+    next(); // Пропускаем всех пользователей без аутентификации
+};
 
 // НОВОЕ: Обслуживание статических файлов для админ-панели
 // Простая админ-панель без внешних зависимостей
