@@ -1771,307 +1771,185 @@ const proxyScript = `
 </script>
 `;
 
-// НОВОЕ: Скрипт для подмены значений селекторов с восстановлением оригинальных значений
+// НОВОЕ: Скрипт для подмены значений селекторов с восстановлением оригинальных значений (исправленная версия)
 const selectorReplacementScript = `
-<script>
+<script type="text/javascript">
 (function() {
-    // Хранилище оригинальных значений элементов по селекторам
-    const originalValues = new Map();
-    
-    // Хранилище активных правил для текущей страницы
-    let activeRules = [];
-    
-    // Функция для подмены значений селекторов
-    async function replaceSelectors() {
-        // Текущий URL страницы
-        const currentPath = window.location.href;
+    try {
+        // Хранилище оригинальных значений элементов по селекторам
+        const originalValues = new Map();
         
-        try {
-            // Получаем правила подмены с нашего прокси-сервера
-            const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(currentPath), {
-                method: 'GET',
-                credentials: 'include'
-            });
-            
-            if (!response.ok) return;
-            
-            const rules = await response.json();
-            
-            // Если для текущей страницы нет правил, возвращаем все измененные селекторы в исходное состояние
-            if (!rules || rules.length === 0) {
-                restoreOriginalValues();
-                activeRules = []; // Сбрасываем активные правила
-                return;
-            }
-            
-            // Сохраняем текущие активные правила
-            activeRules = rules.map(rule => rule.selector);
-            
-            console.log('📎 Применяю правила подмены для селекторов:', rules.length);
-            
-            // Проходим по всем правилам
-            rules.forEach(rule => {
-                try {
-                    // Находим все элементы по селектору
-                    const elements = document.querySelectorAll(rule.selector);
-                    
-                    if (elements.length === 0) {
-                        console.log('⚠️ Элемент не найден для селектора:', rule.selector);
-                        
-                        // Немедленно начинаем наблюдение для нахождения элементов, которые могут появиться позже
-                        const observer = new MutationObserver((mutations, obs) => {
-                            const elements = document.querySelectorAll(rule.selector);
-                            if (elements.length > 0) {
-                                elements.forEach(element => {
-                                    // Сохраняем оригинальное значение, если еще не сохранено
-                                    if (!originalValues.has(element)) {
-                                        originalValues.set(element, element.innerHTML);
-                                    }
-                                    element.innerHTML = rule.value;
-                                    console.log('✅ Значение подменено для селектора (отложенная подмена):', rule.selector);
-                                });
-                                // Не отключаем наблюдатель, т.к. элемент может быть перерисован Angular
-                            }
-                        });
-                        
-                        // Наблюдаем за изменениями в DOM с максимальным приоритетом
-                        observer.observe(document.documentElement, {
-                            childList: true,
-                            subtree: true,
-                            characterData: true,
-                            attributes: true
-                        });
-                        
-                        return;
-                    }
-                    
-                    // Подменяем значение для каждого найденного элемента
-                    elements.forEach(element => {
-                        // Сохраняем оригинальное значение перед подменой, если еще не сохранено
-                        if (!originalValues.has(element)) {
-                            originalValues.set(element, element.innerHTML);
-                        }
-                        element.innerHTML = rule.value;
-                        console.log('✅ Значение подменено для селектора:', rule.selector);
-                    });
-                } catch (err) {
-                    console.error('❌ Ошибка при подмене селектора:', rule.selector, err);
-                }
-            });
-            
-            // Восстанавливаем оригинальные значения для селекторов, которые больше не нужно подменять
-            restoreNonActiveSelectors();
-            
-        } catch (err) {
-            console.error('❌ Ошибка при получении правил подмены:', err);
-        }
-    }
-    
-    // Функция для восстановления оригинальных значений всех измененных элементов
-    function restoreOriginalValues() {
-        console.log('🔄 Восстанавливаю оригинальные значения для всех элементов');
-        originalValues.forEach((originalValue, element) => {
-            if (element && element.innerHTML !== originalValue) {
-                element.innerHTML = originalValue;
-            }
-        });
-    }
-    
-    // Функция для восстановления оригинальных значений только тех элементов,
-    // которые больше не нужно подменять на текущей странице
-    function restoreNonActiveSelectors() {
-        console.log('🔄 Проверяю элементы для восстановления оригинальных значений');
+        // Хранилище активных правил для текущей страницы
+        let activeRules = [];
         
-        originalValues.forEach((originalValue, element) => {
-            if (!element || !document.body.contains(element)) {
-                originalValues.delete(element);
-                return;
-            }
-            
-            // Проверяем, есть ли этот элемент в списке активных селекторов
-            let shouldRestore = true;
-            
-            for (const selector of activeRules) {
-                if (element.matches(selector)) {
-                    shouldRestore = false;
-                    break;
-                }
-            }
-            
-            // Если элемент не должен быть подменен на текущей странице, восстанавливаем его
-            if (shouldRestore && element.innerHTML !== originalValue) {
-                console.log('🔄 Восстанавливаю оригинальное значение для элемента');
-                element.innerHTML = originalValue;
-            }
-        });
-    }
-    
-    // Мгновенно выполняем первую подмену до загрузки DOM
-    (function immediateReplace() {
-        if (document.readyState === 'loading') {
-            replaceSelectors(); // Пытаемся подменить сразу
-            document.addEventListener('DOMContentLoaded', replaceSelectors, {once: true}); // И еще раз после загрузки DOM
-        } else {
-            replaceSelectors(); // DOM уже загружен, подменяем сразу
-        }
-    })();
-    
-    // Используем requestAnimationFrame для подмены на каждом кадре отрисовки
-    function scheduleFrameReplacement() {
-        requestAnimationFrame(() => {
-            replaceSelectors();
-            // Для Angular и других SPA - постоянная проверка на первые несколько секунд
-            const timestamp = Date.now();
-            if (timestamp - startTime < 5000) { // Проверяем 5 секунд после загрузки
-                scheduleFrameReplacement();
-            }
-        });
-    }
-    
-    // Текущее время для отслеживания первых секунд загрузки
-    const startTime = Date.now();
-    scheduleFrameReplacement();
-    
-    // Подписываемся на изменения URL для SPA
-    let lastUrl = window.location.href;
-    
-    // Функция для проверки изменения URL с мгновенной подменой
-    function checkUrlChange() {
-        const currentUrl = window.location.href;
-        if (currentUrl !== lastUrl) {
-            console.log('📍 URL изменился, запускаю подмену селекторов');
-            lastUrl = currentUrl;
-            
-            // Мгновенная подмена для нового URL
-            replaceSelectors();
-            
-            // И еще несколько попыток для динамического контента
-            const checkTime = Date.now();
-            function repeatedCheck() {
-                requestAnimationFrame(() => {
-                    replaceSelectors();
-                    if (Date.now() - checkTime < 2000) { // Проверяем 2 секунды после изменения URL
-                        repeatedCheck();
-                    }
+        // Функция для подмены значений селекторов
+        async function replaceSelectors() {
+            try {
+                // Текущий URL страницы
+                const currentPath = window.location.href;
+                
+                // Получаем правила подмены с нашего прокси-сервера
+                const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(currentPath), {
+                    method: 'GET',
+                    credentials: 'include'
                 });
-            }
-            repeatedCheck();
+                
+                if (!response.ok) return;
+                
+                const rules = await response.json();
+                
+                // Если для текущей страницы нет правил, возвращаем все измененные селекторы в исходное состояние
+                if (!rules || rules.length === 0) {
+                    restoreOriginalValues();
+                    activeRules = []; // Сбрасываем активные правила
+                    return;
+                }
+                
+                // Сохраняем текущие активные правила
+                activeRules = rules.map(rule => rule.selector);
+                
+                // Проходим по всем правилам
+                rules.forEach(rule => {
+                    try {
+                        // Находим все элементы по селектору
+                        const elements = document.querySelectorAll(rule.selector);
+                        
+                        if (elements.length === 0) {
+                            // Наблюдаем за DOM для поиска элементов, которые могут появиться позже
+                            if (!window._selectorObservers) window._selectorObservers = {};
+                            
+                            // Если для этого селектора уже есть наблюдатель, не создаем новый
+                            if (!window._selectorObservers[rule.selector]) {
+                                const observer = new MutationObserver(() => {
+                                    const elements = document.querySelectorAll(rule.selector);
+                                    if (elements.length > 0) {
+                                        elements.forEach(element => {
+                                            // Сохраняем оригинальное значение, если еще не сохранено
+                                            if (!originalValues.has(element)) {
+                                                originalValues.set(element, element.innerHTML);
+                                            }
+                                            element.innerHTML = rule.value;
+                                        });
+                                    }
+                                });
+                                
+                                // Наблюдаем за изменениями в DOM
+                                observer.observe(document.documentElement, {
+                                    childList: true,
+                                    subtree: true
+                                });
+                                
+                                // Сохраняем наблюдатель, чтобы не создавать дубликаты
+                                window._selectorObservers[rule.selector] = observer;
+                            }
+                            
+                            return;
+                        }
+                        
+                        // Подменяем значение для каждого найденного элемента
+                        elements.forEach(element => {
+                            // Сохраняем оригинальное значение перед подменой, если еще не сохранено
+                            if (!originalValues.has(element)) {
+                                originalValues.set(element, element.innerHTML);
+                            }
+                            element.innerHTML = rule.value;
+                        });
+                    } catch (err) {}
+                });
+                
+                // Восстанавливаем оригинальные значения для селекторов, которые больше не нужно подменять
+                restoreNonActiveSelectors();
+                
+            } catch (err) {}
         }
-        requestAnimationFrame(checkUrlChange); // Используем requestAnimationFrame вместо setTimeout
-    }
-    
-    // Запускаем проверку URL
-    checkUrlChange();
-    
-    // Также используем MutationObserver для отслеживания изменений в DOM
-    const observer = new MutationObserver(mutations => {
-        // Быстро определяем, есть ли релевантные изменения
-        const hasPriceChanges = mutations.some(mutation => {
-            // Приоритетно проверяем элементы с содержимым цен
-            return (mutation.type === 'childList' && 
-                    mutation.target.tagName === 'SPAN' && 
-                    (mutation.target.className.includes('ng-star-inserted') || 
-                     mutation.target.textContent.includes('₽') || 
-                     mutation.target.textContent.includes('$'))) || 
-                   (mutation.type === 'characterData' && 
-                    mutation.target.textContent && 
-                    (mutation.target.textContent.includes('₽') || 
-                     mutation.target.textContent.includes('$')));
+        
+        // Функция для восстановления оригинальных значений всех измененных элементов
+        function restoreOriginalValues() {
+            originalValues.forEach((originalValue, element) => {
+                if (element && document.body.contains(element) && element.innerHTML !== originalValue) {
+                    element.innerHTML = originalValue;
+                }
+            });
+        }
+        
+        // Функция для восстановления оригинальных значений только тех элементов,
+        // которые больше не нужно подменять на текущей странице
+        function restoreNonActiveSelectors() {
+            originalValues.forEach((originalValue, element) => {
+                if (!element || !document.body.contains(element)) {
+                    originalValues.delete(element);
+                    return;
+                }
+                
+                // Проверяем, есть ли этот элемент в списке активных селекторов
+                let shouldRestore = true;
+                
+                for (const selector of activeRules) {
+                    if (element.matches(selector)) {
+                        shouldRestore = false;
+                        break;
+                    }
+                }
+                
+                // Если элемент не должен быть подменен на текущей странице, восстанавливаем его
+                if (shouldRestore && element.innerHTML !== originalValue) {
+                    element.innerHTML = originalValue;
+                }
+            });
+        }
+        
+        // Выполняем подмену после загрузки DOM
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', replaceSelectors);
+        } else {
+            replaceSelectors();
+        }
+        
+        // Отслеживаем изменения URL для SPA
+        let lastUrl = window.location.href;
+        
+        // Функция для проверки изменения URL
+        function checkUrlChange() {
+            const currentUrl = window.location.href;
+            if (currentUrl !== lastUrl) {
+                lastUrl = currentUrl;
+                setTimeout(replaceSelectors, 100);
+            }
+            setTimeout(checkUrlChange, 100);
+        }
+        
+        // Запускаем проверку URL
+        checkUrlChange();
+        
+        // Наблюдаем за изменениями DOM для активных элементов
+        const domObserver = new MutationObserver(() => {
+            if (activeRules.length > 0) {
+                setTimeout(replaceSelectors, 10);
+            }
         });
         
-        if (hasPriceChanges) {
-            // Для изменений, связанных с ценами, делаем подмену немедленно
-            requestAnimationFrame(replaceSelectors);
-            return;
+        // Запускаем наблюдатель с минимальной конфигурацией
+        domObserver.observe(document.documentElement, {
+            childList: true,
+            subtree: true
+        });
+        
+        // Упрощенная обработка History API
+        if (window.history) {
+            const originalPushState = window.history.pushState;
+            if (originalPushState) {
+                window.history.pushState = function() {
+                    originalPushState.apply(this, arguments);
+                    setTimeout(replaceSelectors, 100);
+                };
+            }
         }
         
-        // Общая проверка для других типов изменений
-        const hasImportantChanges = mutations.some(mutation => 
-            (mutation.type === 'childList' && 
-             mutation.addedNodes.length > 0 && 
-             Array.from(mutation.addedNodes).some(node => 
-                node.nodeType === 1 && 
-                (node.tagName === 'DIV' || 
-                 node.tagName === 'SPAN' || 
-                 node.tagName === 'APP-PAGE-INVENTORY-PRICE')
-             )) ||
-            (mutation.type === 'attributes' && 
-             (mutation.target.tagName === 'SPAN' || 
-              mutation.target.tagName === 'DIV' || 
-              mutation.target.tagName === 'APP-PAGE-INVENTORY-PRICE'))
-        );
-        
-        if (hasImportantChanges) {
-            requestAnimationFrame(replaceSelectors); // Используем requestAnimationFrame для оптимизации
-        }
-    });
-    
-    // Наблюдаем за всем документом с максимальной глубиной и скоростью
-    observer.observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-        attributes: true,
-        attributeOldValue: true,
-        characterDataOldValue: true
-    });
-    
-    // Хак для Angular приложений - подменяем значения после изменений шаблонов
-    if (window.Zone && window.Zone.__symbol__) {
-        console.log('📍 Обнаружен Angular, устанавливаю дополнительные перехваты для мгновенной подмены');
-        
-        // Перехватываем изменения View
-        const originalRender = Element.prototype.render;
-        if (originalRender) {
-            Element.prototype.render = function(...args) {
-                const result = originalRender.apply(this, args);
-                // Мгновенно вызываем подмену после рендеринга
-                requestAnimationFrame(replaceSelectors);
-                return result;
-            };
-        }
-        
-        // Стараемся перехватить все асинхронные операции, которые могут влиять на DOM
-        const originalSetTimeout = window.setTimeout;
-        window.setTimeout = function(callback, delay, ...args) {
-            const wrappedCallback = function() {
-                const result = callback.apply(this, args);
-                // После таймаута проверяем необходимость подмены
-                if (delay < 500) { // Только для быстрых таймаутов
-                    requestAnimationFrame(replaceSelectors);
-                }
-                return result;
-            };
-            return originalSetTimeout.call(window, wrappedCallback, delay);
-        };
-    }
-    
-    // Явное добавление обработчика событий для popstate, pushState и replaceState
-    window.addEventListener('popstate', () => {
-        console.log('🔍 Обнаружена навигация popstate');
-        replaceSelectors();
-    });
-    
-    // Перехватываем History API для SPA
-    if (window.history && window.history.pushState) {
-        const originalPushState = window.history.pushState;
-        window.history.pushState = function() {
-            originalPushState.apply(this, arguments);
-            console.log('🔍 Обнаружена навигация pushState');
-            setTimeout(replaceSelectors, 50); // Небольшая задержка для обновления DOM
-        };
-    }
-    
-    if (window.history && window.history.replaceState) {
-        const originalReplaceState = window.history.replaceState;
-        window.history.replaceState = function() {
-            originalReplaceState.apply(this, arguments);
-            console.log('🔍 Обнаружена навигация replaceState');
-            setTimeout(replaceSelectors, 50); // Небольшая задержка для обновления DOM
-        };
-    }
-    
-    console.log('📍 Система подмены селекторов инициализирована с мгновенным режимом и восстановлением оригинальных значений');
+        // Обработка popstate для навигации назад/вперед
+        window.addEventListener('popstate', () => {
+            setTimeout(replaceSelectors, 100);
+        });
+    } catch(e) {}
 })();
 </script>
 `;
