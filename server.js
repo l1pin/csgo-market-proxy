@@ -1800,312 +1800,203 @@ const proxyScript = `
 </script>
 `;
 
-// МАКСИМАЛЬНО СТАБИЛЬНАЯ СИСТЕМА ПОДМЕНЫ для SPA
+// АГРЕССИВНАЯ СИСТЕМА ПОДМЕНЫ для SPA с динамической загрузкой
 const selectorReplacementScript = `
 <script type="text/javascript">
-// Супер-стабильная система подмены для SPA
+// Система подмены для SPA с динамической загрузкой
 (function() {
     let replacementRules = [];
+    let isActive = false;
     let currentURL = window.location.href;
-    let isInitialized = false;
-    let attemptCounter = 0;
     
-    // Функция для безопасного логирования
-    function log(message, data = '') {
-        console.log('[REPLACEMENT]', message, data);
-    }
-    
-    // Функция для загрузки правил с повторными попытками
-    async function loadRulesWithRetry(maxAttempts = 3) {
-        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-            try {
-                log('Попытка загрузки правил', attempt + '/' + maxAttempts);
-                
-                const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(currentURL), {
-                    method: 'GET',
-                    credentials: 'include',
-                    cache: 'no-cache'
-                });
-                
-                if (response.ok) {
-                    const rules = await response.json();
-                    replacementRules = Array.isArray(rules) ? rules : [];
-                    log('Правила успешно загружены:', replacementRules.length);
-                    return true;
-                } else {
-                    log('Ошибка HTTP:', response.status);
-                }
-            } catch (e) {
-                log('Ошибка загрузки правил (попытка ' + attempt + '):', e.message);
-                if (attempt < maxAttempts) {
-                    await new Promise(resolve => setTimeout(resolve, 200));
-                }
+    // Функция для загрузки правил подмены
+    async function loadRules() {
+        try {
+            const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(currentURL), {
+                method: 'GET',
+                credentials: 'include'
+            });
+            
+            if (response.ok) {
+                const rules = await response.json();
+                replacementRules = rules || [];
+                console.log('Загружено правил подмены:', replacementRules.length);
+                return true;
             }
+        } catch (e) {
+            console.error('Ошибка загрузки правил:', e);
         }
-        
-        log('Не удалось загрузить правила после всех попыток');
         return false;
     }
     
-    // Функция для поиска элементов с повторными попытками
-    function findElementsWithRetry(selector, maxAttempts = 5) {
-        return new Promise((resolve) => {
-            let attempt = 0;
-            
-            function tryFind() {
-                attempt++;
-                const elements = document.querySelectorAll(selector);
-                
-                if (elements.length > 0) {
-                    log('Элементы найдены для селектора:', selector + ' (' + elements.length + ' шт.)');
-                    resolve(Array.from(elements));
-                } else if (attempt < maxAttempts) {
-                    log('Элементы не найдены, попытка', attempt + '/' + maxAttempts + ' для:', selector);
-                    setTimeout(tryFind, 200);
-                } else {
-                    log('Элементы не найдены после всех попыток:', selector);
-                    resolve([]);
-                }
-            }
-            
-            tryFind();
-        });
-    }
-    
-    // Основная функция применения правил с подробным логированием
-    async function applyReplacementsDetailed() {
-        attemptCounter++;
-        log('=== НАЧАЛО ПРИМЕНЕНИЯ ПРАВИЛ (#' + attemptCounter + ') ===');
+    // Функция для применения правил подмены
+    function applyReplacements() {
+        if (!replacementRules.length) return;
         
-        if (!replacementRules || replacementRules.length === 0) {
-            log('Нет правил для применения');
-            return;
-        }
-        
-        log('Применяю правил:', replacementRules.length);
-        
-        for (const rule of replacementRules) {
-            try {
-                log('Обработка правила:', {
-                    selector: rule.selector,
-                    originalValue: rule.originalValue || '(не указано)',
-                    newValue: rule.value
-                });
-                
-                const elements = await findElementsWithRetry(rule.selector);
-                
-                if (elements.length === 0) {
-                    log('ВНИМАНИЕ: Элементы не найдены для селектора:', rule.selector);
-                    continue;
-                }
-                
-                let replacedCount = 0;
-                
-                elements.forEach((element, index) => {
-                    const currentContent = element.innerHTML.trim();
-                    log('Элемент ' + (index + 1) + ' содержит:', currentContent);
-                    
-                    let shouldReplace = false;
-                    
-                    if (rule.originalValue && rule.originalValue.trim()) {
-                        if (currentContent === rule.originalValue.trim()) {
-                            shouldReplace = true;
-                            log('Соответствие найдено, будет заменено');
-                        } else {
-                            log('Содержимое не соответствует оригинальному значению');
-                            log('Ожидалось:', rule.originalValue.trim());
-                            log('Получено:', currentContent);
-                        }
-                    } else {
-                        shouldReplace = true;
-                        log('Оригинальное значение не указано, заменяем принудительно');
-                    }
-                    
-                    if (shouldReplace) {
-                        element.innerHTML = rule.value;
-                        replacedCount++;
-                        log('✅ ЗАМЕНА ВЫПОЛНЕНА для элемента ' + (index + 1));
-                    }
-                });
-                
-                log('Итого заменено элементов:', replacedCount + ' из ' + elements.length);
-                
-            } catch (e) {
-                log('❌ Ошибка при применении правила:', e.message);
-            }
-        }
-        
-        log('=== КОНЕЦ ПРИМЕНЕНИЯ ПРАВИЛ ===');
-    }
-    
-    // Простая функция применения без логирования для регулярных вызовов
-    async function applyReplacementsQuiet() {
-        if (!replacementRules || replacementRules.length === 0) return;
-        
-        for (const rule of replacementRules) {
+        replacementRules.forEach(rule => {
             try {
                 const elements = document.querySelectorAll(rule.selector);
                 
                 elements.forEach(element => {
-                    const currentContent = element.innerHTML.trim();
+                    // Проверяем, нужно ли применять правило
                     let shouldReplace = false;
                     
                     if (rule.originalValue && rule.originalValue.trim()) {
-                        if (currentContent === rule.originalValue.trim()) {
+                        // Если указано оригинальное значение, проверяем совпадение
+                        if (element.innerHTML.trim() === rule.originalValue.trim()) {
                             shouldReplace = true;
                         }
                     } else {
+                        // Если оригинальное значение не указано, всегда подменяем
                         shouldReplace = true;
                     }
                     
                     if (shouldReplace) {
                         element.innerHTML = rule.value;
+                        console.log('Подменено значение:', rule.selector, '->', rule.value);
                     }
                 });
             } catch (e) {
-                // Игнорируем ошибки в тихом режиме
+                console.error('Ошибка применения правила:', e);
             }
-        }
+        });
     }
     
-    // Отслеживание изменений URL
-    function trackURLChanges() {
-        setInterval(() => {
-            const newURL = window.location.href;
-            if (newURL !== currentURL) {
-                log('🔄 URL ИЗМЕНИЛСЯ:', currentURL + ' -> ' + newURL);
-                currentURL = newURL;
-                
-                // Перезагружаем правила и применяем их
-                loadRulesWithRetry().then(success => {
-                    if (success) {
-                        log('Применяю правила для нового URL...');
-                        setTimeout(() => applyReplacementsDetailed(), 100);
-                        setTimeout(() => applyReplacementsDetailed(), 500);
-                        setTimeout(() => applyReplacementsDetailed(), 1000);
-                        setTimeout(() => applyReplacementsDetailed(), 2000);
-                    }
-                });
-            }
-        }, 100);
-    }
-    
-    // Наблюдатель за DOM с умной логикой
-    function startSmartDOMObserver() {
-        let changeTimeout;
-        
+    // Агрессивный наблюдатель за DOM
+    function startDOMObserver() {
         const observer = new MutationObserver((mutations) => {
-            let hasRelevantChanges = false;
+            let hasChanges = false;
             
             mutations.forEach(mutation => {
                 if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-                    // Проверяем, добавились ли элементы, которые могут содержать наши селекторы
-                    for (const node of mutation.addedNodes) {
-                        if (node.nodeType === 1) { // Element node
-                            hasRelevantChanges = true;
-                            break;
-                        }
-                    }
+                    hasChanges = true;
                 } else if (mutation.type === 'characterData') {
-                    hasRelevantChanges = true;
+                    hasChanges = true;
                 }
             });
             
-            if (hasRelevantChanges) {
-                // Используем debouncing для избежания слишком частых вызовов
-                clearTimeout(changeTimeout);
-                changeTimeout = setTimeout(() => {
-                    applyReplacementsQuiet();
-                }, 50);
+            if (hasChanges) {
+                // Применяем правила немедленно и еще раз через короткий интервал
+                applyReplacements();
+                setTimeout(applyReplacements, 10);
+                setTimeout(applyReplacements, 50);
+                setTimeout(applyReplacements, 100);
             }
         });
         
         observer.observe(document.documentElement, {
             childList: true,
             subtree: true,
-            characterData: true
+            characterData: true,
+            attributes: false
         });
         
-        log('DOM Observer запущен');
+        console.log('DOM Observer запущен');
     }
     
-    // Перехват сетевых запросов с улучшенной логикой
+    // Перехват всех сетевых запросов
     function interceptNetworkRequests() {
-        // XMLHttpRequest
-        const originalXHRSend = XMLHttpRequest.prototype.send;
-        XMLHttpRequest.prototype.send = function() {
+        // Перехват XMLHttpRequest
+        const originalXHROpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function() {
             const xhr = this;
             
-            xhr.addEventListener('loadend', function() {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    setTimeout(applyReplacementsQuiet, 100);
-                    setTimeout(applyReplacementsQuiet, 300);
-                }
+            xhr.addEventListener('load', function() {
+                // Применяем правила после загрузки данных
+                setTimeout(applyReplacements, 50);
+                setTimeout(applyReplacements, 200);
+                setTimeout(applyReplacements, 500);
             });
             
-            return originalXHRSend.apply(this, arguments);
+            return originalXHROpen.apply(this, arguments);
         };
         
-        // Fetch API
+        // Перехват Fetch API
         const originalFetch = window.fetch;
         window.fetch = async function() {
             const result = await originalFetch.apply(this, arguments);
             
-            if (result.ok) {
-                setTimeout(applyReplacementsQuiet, 100);
-                setTimeout(applyReplacementsQuiet, 300);
-            }
+            // Применяем правила после fetch запроса
+            setTimeout(applyReplacements, 50);
+            setTimeout(applyReplacements, 200);
+            setTimeout(applyReplacements, 500);
             
             return result;
         };
         
-        log('Перехват сетевых запросов установлен');
+        console.log('Перехват сетевых запросов установлен');
     }
     
-    // Основная инициализация
+    // Отслеживание изменений URL
+    function trackURLChanges() {
+        // Проверяем URL каждые 100мс
+        setInterval(() => {
+            const newURL = window.location.href;
+            if (newURL !== currentURL) {
+                console.log('URL изменился:', currentURL, '->', newURL);
+                currentURL = newURL;
+                
+                // Перезагружаем правила для нового URL
+                loadRules().then(() => {
+                    // Применяем новые правила несколько раз
+                    applyReplacements();
+                    setTimeout(applyReplacements, 100);
+                    setTimeout(applyReplacements, 300);
+                    setTimeout(applyReplacements, 500);
+                    setTimeout(applyReplacements, 1000);
+                });
+            }
+        }, 100);
+        
+        // Также отслеживаем события popstate
+        window.addEventListener('popstate', () => {
+            setTimeout(() => {
+                currentURL = window.location.href;
+                loadRules().then(applyReplacements);
+            }, 50);
+        });
+        
+        console.log('Отслеживание URL запущено');
+    }
+    
+    // Регулярное применение правил для надежности
+    function startRegularReplacement() {
+        // Применяем правила каждые 500мс
+        setInterval(() => {
+            if (replacementRules.length > 0) {
+                applyReplacements();
+            }
+        }, 500);
+        
+        console.log('Регулярное применение правил запущено');
+    }
+    
+    // Инициализация системы подмены
     async function initialize() {
-        if (isInitialized) {
-            log('Система уже инициализирована, пропускаем');
-            return;
-        }
+        console.log('Инициализация системы подмены селекторов...');
         
-        log('🚀 ИНИЦИАЛИЗАЦИЯ СИСТЕМЫ ПОДМЕНЫ');
-        log('Текущий URL:', currentURL);
+        // Загружаем правила для текущей страницы
+        const rulesLoaded = await loadRules();
         
-        // Загружаем правила
-        const success = await loadRulesWithRetry();
-        
-        if (success && replacementRules.length > 0) {
-            log('Найдено правил для применения:', replacementRules.length);
+        if (rulesLoaded) {
+            // Сразу применяем правила несколько раз
+            applyReplacements();
+            setTimeout(applyReplacements, 100);
+            setTimeout(applyReplacements, 300);
+            setTimeout(applyReplacements, 500);
+            setTimeout(applyReplacements, 1000);
+            setTimeout(applyReplacements, 2000);
             
-            // Применяем правила несколько раз с разными интервалами
-            log('Начинаю применение правил...');
-            
-            await applyReplacementsDetailed(); // Сразу с логированием
-            setTimeout(() => applyReplacementsDetailed(), 200);
-            setTimeout(() => applyReplacementsDetailed(), 500);
-            setTimeout(() => applyReplacementsDetailed(), 1000);
-            setTimeout(() => applyReplacementsDetailed(), 2000);
-            
-            // Запускаем системы мониторинга
-            startSmartDOMObserver();
+            // Запускаем все системы мониторинга
+            startDOMObserver();
             interceptNetworkRequests();
             trackURLChanges();
+            startRegularReplacement();
             
-            // Регулярное применение каждые 2 секунды
-            setInterval(() => {
-                if (replacementRules.length > 0) {
-                    applyReplacementsQuiet();
-                }
-            }, 2000);
-            
-            isInitialized = true;
-            log('✅ СИСТЕМА ПОДМЕНЫ УСПЕШНО ЗАПУЩЕНА');
-            
-        } else if (success && replacementRules.length === 0) {
-            log('ℹ️ Правила загружены, но список пуст для текущего URL');
+            isActive = true;
+            console.log('Система подмены активирована');
         } else {
-            log('❌ Не удалось загрузить правила');
+            console.log('Правила подмены не найдены');
         }
     }
     
@@ -2116,21 +2007,8 @@ const selectorReplacementScript = `
         initialize();
     }
     
-    // Дополнительный запуск через 2 секунды для надежности
-    setTimeout(() => {
-        if (!isInitialized) {
-            log('🔄 Повторная инициализация через 2 секунды...');
-            initialize();
-        }
-    }, 2000);
-    
-    // Еще один запуск через 5 секунд для особо медленных сайтов
-    setTimeout(() => {
-        if (!isInitialized) {
-            log('🔄 Финальная попытка инициализации через 5 секунд...');
-            initialize();
-        }
-    }, 5000);
+    // Дополнительная инициализация через 1 секунду для надежности
+    setTimeout(initialize, 1000);
 })();
 </script>
 `;
