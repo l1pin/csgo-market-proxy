@@ -8,7 +8,7 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const fs = require('fs');
-const bodyParser = require('body-parser'); // Добавлен для обработки форм в админке
+const bodyParser = require('body-parser');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -32,6 +32,44 @@ const selectorRules = new Map();
 // Путь к файлу для сохранения правил
 const RULES_FILE_PATH = path.join(__dirname, 'selector_rules.json');
 
+// НОВОЕ: Функция для нормализации URL с символом "★"
+function normalizeUrl(url) {
+    if (!url) return url;
+    // Заменяем символ "★" на его URL-encoded версию
+    return url.replace(/★/g, '%E2%98%85');
+}
+
+// НОВОЕ: Функция для сравнения URL с учетом различных вариантов символа "★"
+function urlMatches(ruleUrl, pageUrl) {
+    if (!ruleUrl || !pageUrl) return false;
+    
+    // Нормализуем оба URL
+    const normalizedRuleUrl = normalizeUrl(ruleUrl);
+    const normalizedPageUrl = normalizeUrl(pageUrl);
+    
+    // Проверяем точное совпадение
+    if (normalizedRuleUrl === normalizedPageUrl) return true;
+    
+    // Проверяем базовое совпадение без параметров
+    const ruleBase = normalizedRuleUrl.split('?')[0];
+    const pageBase = normalizedPageUrl.split('?')[0];
+    
+    if (ruleBase === pageBase) return true;
+    
+    // Проверяем регулярное выражение
+    if (ruleUrl.startsWith('/') && ruleUrl.endsWith('/')) {
+        try {
+            const regex = new RegExp(ruleUrl.substring(1, ruleUrl.length - 1));
+            return regex.test(pageUrl);
+        } catch (e) {
+            console.error('Invalid regex in rule:', ruleUrl);
+            return false;
+        }
+    }
+    
+    return false;
+}
+
 // Загрузка сохраненных правил при запуске (если есть)
 try {
     if (fs.existsSync(RULES_FILE_PATH)) {
@@ -39,6 +77,10 @@ try {
         const rules = JSON.parse(rulesData);
         
         rules.forEach(rule => {
+            // НОВОЕ: Обратная совместимость со старым форматом
+            if (rule.selector && !rule.selectors) {
+                rule.selectors = [{ selector: rule.selector, addSpace: false }];
+            }
             selectorRules.set(rule.id, rule);
         });
         
@@ -63,8 +105,8 @@ function saveRulesToFile() {
 const httpsAgent = new https.Agent({
     rejectUnauthorized: false,
     keepAlive: true,
-    timeout: 60000, // Увеличенный таймаут
-    maxSockets: 100 // Увеличенное количество сокетов
+    timeout: 60000,
+    maxSockets: 100
 });
 
 // Определяем, используется ли HTTPS
@@ -84,7 +126,6 @@ function getBaseUrl(req) {
 
 // Middleware для CORS и заголовков
 app.use((req, res, next) => {
-    // Установка CORS заголовков
     const origin = req.headers.origin || '*';
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Credentials', 'true');
@@ -92,12 +133,10 @@ app.use((req, res, next) => {
     res.header('Access-Control-Allow-Headers', '*');
     res.header('Access-Control-Expose-Headers', '*');
     
-    // Опции для CORS preflight
     if (req.method === 'OPTIONS') {
         return res.status(204).end();
     }
     
-    // Если запрос по HTTP, но от Render/Cloudflare по HTTPS
     if (isSecure(req) || req.headers['x-forwarded-proto'] === 'https') {
         res.setHeader('Content-Security-Policy', "upgrade-insecure-requests");
     }
@@ -116,7 +155,6 @@ function getSession(sessionId) {
         });
     }
     
-    // Обновляем время последнего доступа
     const session = sessions.get(sessionId);
     session.lastAccess = Date.now();
     
@@ -165,28 +203,21 @@ function modifyUrls(content, baseUrl, contentType = '') {
     
     let modified = content.toString();
     
-    // Определяем протокол для замены
     const isHttps = baseUrl.startsWith('https');
     const wsProtocol = isHttps ? 'wss' : 'ws';
     const hostWithoutProtocol = baseUrl.replace(/^https?:\/\//, '');
     
-    // Основные замены для всех типов контента
     modified = modified.replace(/https:\/\/market\.csgo\.com/g, baseUrl);
     modified = modified.replace(/http:\/\/market\.csgo\.com/g, baseUrl);
     modified = modified.replace(/\/\/market\.csgo\.com/g, baseUrl);
     
-    // WebSocket URL (корректная замена без дублирования протокола)
     modified = modified.replace(/wss:\/\/centrifugo2\.csgotrader\.app/g, `${wsProtocol}://${hostWithoutProtocol}/ws`);
     
-    // Поддержка различных форматов GraphQL URL
     modified = modified.replace(/https:\/\/market\.csgo\.com\/api\/graphql/g, `${baseUrl}/api/graphql`);
     
-    // Исправляем потенциальные проблемы с путями API
     modified = modified.replace(/(['"])\/api\//g, `$1${baseUrl}/api/`);
     
-    // ИСПРАВЛЕНО: Обрабатываем проблемный chunk-FWBJZS6X.js
     if (contentType.includes('javascript') && modified.includes('chunk-FWBJZS6X.js')) {
-        // Добавляем обработку ошибок для GraphQL запросов в проблемном чанке
         modified = modified.replace(
             /GQL fail: viewItem/g, 
             'console.warn("GQL request handled"); try { viewItem'
@@ -196,7 +227,6 @@ function modifyUrls(content, baseUrl, contentType = '') {
             'console.warn("GQL request handled"); try { $1'
         );
         
-        // Добавляем блок catch в конце функций viewItem
         if (modified.includes('viewItem')) {
             modified = modified.replace(
                 /viewItem\(\)/g,
@@ -205,48 +235,34 @@ function modifyUrls(content, baseUrl, contentType = '') {
         }
     }
     
-    // НОВОЕ: Улучшенная инъекция скрипта подмены - добавляем его в самое начало документа
-    // для максимально быстрой загрузки и работы
     if (contentType.includes('html')) {
-        // Добавляем meta тег для upgrade-insecure-requests
         if (!modified.includes('upgrade-insecure-requests')) {
             modified = modified.replace(/<head[^>]*>/i, `$&<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">`);
         }
         
-        // Добавляем base тег
         if (!modified.includes('<base')) {
             modified = modified.replace(/<head[^>]*>/i, `$&<base href="${baseUrl}/">`);
         }
         
-        // Приоритетно вставляем скрипт подмены в начало <head>
         modified = modified.replace(/<head[^>]*>/i, `$&${selectorReplacementScript}`);
-        
-        // Инжектим улучшенный прокси скрипт с исправлениями для GraphQL и WebSocket
         modified = modified.replace(/<head[^>]*>/i, `$&${proxyScript}`);
-        
-        // Добавляем скрипт для перехвата кнопок логина в конец body
         modified = modified.replace('</body>', loginButtonsScript + '</body>');
     }
     
-    // Специфичные замены для JavaScript
     if (contentType.includes('javascript')) {
         modified = modified.replace(/"\/api\//g, `"${baseUrl}/api/`);
         modified = modified.replace(/'\/api\//g, `'${baseUrl}/api/`);
         
-        // Корректная замена WebSocket URLs в JavaScript
         modified = modified.replace(/centrifugo2\.csgotrader\.app/g, 
             hostWithoutProtocol + '/ws');
             
-        // Улучшена обработка GraphQL URLs
         modified = modified.replace(/['"]https:\/\/market\.csgo\.com\/api\/graphql['"]/g, 
             `'${baseUrl}/api/graphql'`);
             
-        // ИСПРАВЛЕНО: Добавлена обработка GQL ошибок
         if (modified.includes('GQL fail') || modified.includes('viewItem')) {
             modified = modified.replace(/console\.error\(['"]GQL fail/g, 
                 'console.warn("GQL fail handled:" + ');
                 
-            // Оборачиваем вызовы viewItem в try/catch
             modified = modified.replace(
                 /return(\s+)viewItem\(/g, 
                 'try { return$1viewItem('
@@ -257,17 +273,14 @@ function modifyUrls(content, baseUrl, contentType = '') {
             );
         }
         
-        // ИСПРАВЛЕНО: Исправление для chunk-FWBJZS6X.js:2957
         if (modified.includes('chunk-FWBJZS6X.js') || modified.includes('[chunk-FWBJZS6X.js:3012:33350]')) {
             console.log('Applying fixes for problematic chunk-FWBJZS6X.js');
             
-            // Предотвращаем падение при ошибках
             modified = modified.replace(
                 /throw new Error\(['"]GQL fail/g,
                 'console.warn("Handled GQL error:"'
             );
             
-            // Добавляем обработку ошибок для ajax/fetch запросов
             modified = modified.replace(
                 /(\.then\()function\s*\(\s*([a-zA-Z0-9_]+)\s*\)\s*{/g,
                 '$1function($2) { try {'
@@ -280,7 +293,6 @@ function modifyUrls(content, baseUrl, contentType = '') {
         }
     }
     
-    // Специфичные замены для CSS
     if (contentType.includes('css')) {
         modified = modified.replace(/url\(['"]?\//g, `url('${baseUrl}/`);
         modified = modified.replace(/url\(['"]?http:\/\//g, `url('${baseUrl.replace('https:', 'http:')}/`);
@@ -289,20 +301,18 @@ function modifyUrls(content, baseUrl, contentType = '') {
     return modified;
 }
 
-// ИСПРАВЛЕНО: Улучшенная обработка WebSocket прокси с повторными попытками
+// WebSocket прокси (остается без изменений)
 const wsProxy = new WebSocket.Server({ 
     noServer: true,
     clientTracking: true,
     perMessageDeflate: true
 });
 
-// Карта для отслеживания активных соединений
 const activeWSConnections = new Map();
 
 server.on('upgrade', (request, socket, head) => {
     const pathname = url.parse(request.url).pathname;
     
-    // Улучшена обработка WebSocket путей
     if (pathname === '/ws' || pathname.startsWith('/ws/') || pathname.includes('connection/websocket')) {
         wsProxy.handleUpgrade(request, socket, head, (ws) => {
             handleWebSocketProxy(ws, request);
@@ -312,10 +322,8 @@ server.on('upgrade', (request, socket, head) => {
     }
 });
 
-// ИСПРАВЛЕНО: Улучшенная функция обработки WebSocket соединений с повторными попытками
 function handleWebSocketProxy(clientWs, request) {
     try {
-        // Корректное построение целевого URL
         let wsPath = request.url.replace('/ws', '');
         if (!wsPath.includes('connection/websocket')) {
             wsPath += '/connection/websocket';
@@ -324,10 +332,8 @@ function handleWebSocketProxy(clientWs, request) {
         const targetUrl = WS_TARGET + wsPath;
         console.log('WebSocket proxy:', targetUrl);
         
-        // Генерируем уникальный ID для соединения
         const connectionId = Math.random().toString(36).substring(2, 15);
         
-        // Сохраняем информацию о соединении
         activeWSConnections.set(connectionId, {
             clientWs,
             targetWs: null,
@@ -335,10 +341,9 @@ function handleWebSocketProxy(clientWs, request) {
             connected: false,
             retryCount: 0,
             lastActivity: Date.now(),
-            buffer: [] // Буфер для сообщений до установки соединения
+            buffer: []
         });
         
-        // Функция для подключения к целевому WebSocket с повторными попытками
         function connectToTarget(retryCount = 0) {
             const MAX_RETRIES = 5;
             const RETRY_DELAY = 2000 * Math.pow(1.5, retryCount);
@@ -352,7 +357,6 @@ function handleWebSocketProxy(clientWs, request) {
             
             console.log(`Attempting WebSocket connection (attempt ${retryCount + 1}): ${targetUrl}`);
             
-            // Добавлены более надежные заголовки для WebSocket соединения
             const targetWs = new WebSocket(targetUrl, {
                 headers: {
                     'Origin': 'https://market.csgo.com',
@@ -368,14 +372,12 @@ function handleWebSocketProxy(clientWs, request) {
                 handshakeTimeout: 15000
             });
             
-            // Сохраняем целевой WebSocket в Map
             const connectionInfo = activeWSConnections.get(connectionId);
             if (connectionInfo) {
                 connectionInfo.targetWs = targetWs;
                 connectionInfo.retryCount = retryCount;
             }
             
-            // Обработка открытия соединения
             targetWs.on('open', () => {
                 console.log(`Target WebSocket connected successfully (${connectionId})`);
                 
@@ -384,7 +386,6 @@ function handleWebSocketProxy(clientWs, request) {
                     connectionInfo.connected = true;
                     connectionInfo.lastActivity = Date.now();
                     
-                    // Отправляем буферизованные сообщения, если они есть
                     if (connectionInfo.buffer.length > 0) {
                         console.log(`Sending ${connectionInfo.buffer.length} buffered messages`);
                         connectionInfo.buffer.forEach(message => {
@@ -399,7 +400,6 @@ function handleWebSocketProxy(clientWs, request) {
                 }
             });
             
-            // Client -> Server с обработкой ошибок и буферизацией
             clientWs.on('message', (message) => {
                 try {
                     const connectionInfo = activeWSConnections.get(connectionId);
@@ -410,7 +410,6 @@ function handleWebSocketProxy(clientWs, request) {
                     if (connectionInfo.connected && connectionInfo.targetWs.readyState === WebSocket.OPEN) {
                         connectionInfo.targetWs.send(message);
                     } else {
-                        // Буферизуем сообщения, если соединение еще не установлено
                         console.log(`Buffering message for later delivery (${connectionId})`);
                         connectionInfo.buffer.push(message);
                     }
@@ -419,7 +418,6 @@ function handleWebSocketProxy(clientWs, request) {
                 }
             });
             
-            // Server -> Client с обработкой ошибок
             targetWs.on('message', (message) => {
                 try {
                     const connectionInfo = activeWSConnections.get(connectionId);
@@ -435,7 +433,6 @@ function handleWebSocketProxy(clientWs, request) {
                 }
             });
             
-            // Обработка закрытия соединений
             clientWs.on('close', (code, reason) => {
                 console.log(`Client WebSocket closed (${connectionId}): ${code} ${reason}`);
                 
@@ -456,13 +453,11 @@ function handleWebSocketProxy(clientWs, request) {
                 const connectionInfo = activeWSConnections.get(connectionId);
                 if (!connectionInfo) return;
                 
-                // Если это не преднамеренное закрытие, пытаемся переподключиться
                 if (code !== 1000 && code !== 1001 && 
                     connectionInfo.clientWs.readyState === WebSocket.OPEN) {
                     
                     console.log(`Attempting to reconnect WebSocket (${connectionId})...`);
                     
-                    // Уведомляем клиента о переподключении
                     try {
                         connectionInfo.clientWs.send(JSON.stringify({
                             type: 'reconnecting',
@@ -472,22 +467,18 @@ function handleWebSocketProxy(clientWs, request) {
                         // Игнорируем ошибки при отправке
                     }
                     
-                    // Устанавливаем статус соединения
                     connectionInfo.connected = false;
                     
-                    // Пытаемся переподключиться с задержкой
                     setTimeout(() => {
                         connectToTarget(connectionInfo.retryCount + 1);
                     }, 2000);
                     
                 } else if (connectionInfo.clientWs.readyState === WebSocket.OPEN) {
-                    // Если это преднамеренное закрытие, закрываем клиентское соединение
                     connectionInfo.clientWs.close(code, reason);
                     activeWSConnections.delete(connectionId);
                 }
             });
             
-            // Обработка ошибок соединений
             clientWs.on('error', (err) => {
                 console.error(`Client WebSocket error (${connectionId}):`, err.message);
                 
@@ -508,9 +499,7 @@ function handleWebSocketProxy(clientWs, request) {
                 const connectionInfo = activeWSConnections.get(connectionId);
                 if (!connectionInfo) return;
                 
-                // Если клиент еще подключен, пытаемся переподключиться к серверу
                 if (connectionInfo.clientWs.readyState === WebSocket.OPEN) {
-                    // Уведомляем клиента о проблеме
                     try {
                         connectionInfo.clientWs.send(JSON.stringify({
                             type: 'error',
@@ -520,10 +509,8 @@ function handleWebSocketProxy(clientWs, request) {
                         // Игнорируем ошибки при отправке
                     }
                     
-                    // Устанавливаем статус соединения
                     connectionInfo.connected = false;
                     
-                    // Пытаемся переподключиться с задержкой
                     setTimeout(() => {
                         connectToTarget(connectionInfo.retryCount + 1);
                     }, 2000);
@@ -531,7 +518,6 @@ function handleWebSocketProxy(clientWs, request) {
             });
         }
         
-        // Инициируем первое подключение
         connectToTarget(0);
         
     } catch (error) {
@@ -542,14 +528,12 @@ function handleWebSocketProxy(clientWs, request) {
     }
 }
 
-// Периодическая проверка активности WebSocket соединений
 setInterval(() => {
     const now = Date.now();
     
     for (const [id, connection] of activeWSConnections.entries()) {
         const inactiveTime = now - connection.lastActivity;
         
-        // Если соединение неактивно более 2 минут, отправляем ping для проверки
         if (inactiveTime > 2 * 60 * 1000) {
             console.log(`WebSocket inactive for ${Math.round(inactiveTime/1000)}s (${id}), sending ping`);
             
@@ -562,14 +546,12 @@ setInterval(() => {
                     connection.clientWs.ping();
                 }
                 
-                // Обновляем время активности
                 connection.lastActivity = now;
             } catch (e) {
                 console.warn(`Error sending ping for connection ${id}:`, e.message);
             }
         }
         
-        // Если соединение неактивно более 5 минут, закрываем его
         if (inactiveTime > 5 * 60 * 1000) {
             console.log(`Closing inactive WebSocket connection (${id})`);
             
@@ -590,14 +572,13 @@ setInterval(() => {
             activeWSConnections.delete(id);
         }
     }
-}, 60 * 1000); // Проверка каждую минуту
+}, 60 * 1000);
 
-// Убрана аутентификация по требованию заказчика
 const adminAuth = (req, res, next) => {
-    next(); // Пропускаем всех пользователей без аутентификации
+    next();
 };
 
-// НОВОЕ: Модифицированная версия админ-панели с возможностью указать оригинальное значение
+// НОВОЕ: Обновленная админ-панель с поддержкой множественных селекторов
 app.get('/admin', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -609,7 +590,7 @@ app.get('/admin', (req, res) => {
         <style>
             body {
                 font-family: Arial, sans-serif;
-                max-width: 1200px;
+                max-width: 1400px;
                 margin: 0 auto;
                 padding: 20px;
                 background-color: #f5f5f5;
@@ -659,6 +640,14 @@ app.get('/admin', (req, res) => {
             .delete-btn:hover {
                 background-color: #d32f2f;
             }
+            .preset-btn {
+                background-color: #2196F3;
+                margin-left: 10px;
+                margin-bottom: 10px;
+            }
+            .preset-btn:hover {
+                background-color: #0b7dda;
+            }
             table {
                 width: 100%;
                 border-collapse: collapse;
@@ -707,6 +696,53 @@ app.get('/admin', (req, res) => {
                 margin: 10px 0;
                 border-radius: 4px;
             }
+            .selectors-container {
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                padding: 15px;
+                margin: 10px 0;
+                background-color: #f9f9f9;
+            }
+            .selector-item {
+                display: flex;
+                align-items: center;
+                margin-bottom: 10px;
+                padding: 8px;
+                background-color: white;
+                border-radius: 4px;
+            }
+            .selector-item input[type="text"] {
+                flex: 1;
+                margin-right: 10px;
+            }
+            .selector-item input[type="checkbox"] {
+                margin-right: 5px;
+            }
+            .remove-selector {
+                background-color: #f44336;
+                color: white;
+                border: none;
+                padding: 5px 10px;
+                border-radius: 3px;
+                cursor: pointer;
+                font-size: 12px;
+            }
+            .add-selector {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 8px 12px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+                margin-top: 10px;
+            }
+            .checkbox-label {
+                display: flex;
+                align-items: center;
+                font-weight: normal;
+                margin-right: 10px;
+            }
         </style>
     </head>
     <body>
@@ -715,8 +751,8 @@ app.get('/admin', (req, res) => {
             <div id="messageContainer"></div>
             
             <div class="info-block">
-                <p><strong>Важно!</strong> Для корректной работы подмены на динамических сайтах укажите оригинальное значение, которое нужно заменить.</p>
-                <p>Если указать оригинальное значение, подмена будет применяться только к элементам, содержащим именно это значение, а не ко всем элементам с указанным селектором.</p>
+                <p><strong>Важно!</strong> Символ "★" в URL автоматически конвертируется в корректный формат.</p>
+                <p>Теперь поддерживается подмена нескольких селекторов одним значением. Для некоторых селекторов можно добавить пробел перед значением.</p>
             </div>
             
             <h2>Добавить правило подмены</h2>
@@ -725,10 +761,22 @@ app.get('/admin', (req, res) => {
                     <label for="page">URL страницы:</label>
                     <input type="text" id="page" name="page" placeholder="https://market-csgo.co/ru/Gloves/★%20Driver%20Gloves%20%7C%20Racing%20Green%20%28Well-Worn%29?id=6884780475" required>
                 </div>
+                
                 <div class="form-group">
-                    <label for="selector">CSS-селектор:</label>
-                    <input type="text" id="selector" name="selector" placeholder="#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-info-wrap > div > app-page-inventory-price > div > span:nth-child(1)" required>
+                    <label>CSS-селекторы:</label>
+                    <button type="button" class="preset-btn" onclick="addPresetSelectors()">Добавить стандартные селекторы</button>
+                    <div class="selectors-container" id="selectorsContainer">
+                        <div class="selector-item">
+                            <input type="text" placeholder="CSS селектор" required>
+                            <label class="checkbox-label">
+                                <input type="checkbox"> Добавить пробел перед значением
+                            </label>
+                            <button type="button" class="remove-selector" onclick="removeSelector(this)">Удалить</button>
+                        </div>
+                    </div>
+                    <button type="button" class="add-selector" onclick="addSelector()">Добавить селектор</button>
                 </div>
+                
                 <div class="form-group">
                     <label for="originalValue">Оригинальное значение (важно для динамических сайтов):</label>
                     <input type="text" id="originalValue" name="originalValue" placeholder="4212,62₽">
@@ -748,7 +796,7 @@ app.get('/admin', (req, res) => {
                     <tr>
                         <th>ID</th>
                         <th>URL страницы</th>
-                        <th>CSS-селектор</th>
+                        <th>Селекторы</th>
                         <th>Оригинальное значение</th>
                         <th>Новое значение</th>
                         <th>Действия</th>
@@ -761,7 +809,55 @@ app.get('/admin', (req, res) => {
         </div>
         
         <script>
-            // Функция для отображения сообщений
+            // Предустановленные селекторы
+            const presetSelectors = [
+                { selector: '#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-info-wrap > div > app-page-inventory-price > div > span:nth-child(1)', addSpace: false },
+                { selector: '#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-image > app-bid-ask-chart-container > div > div.item.ask.ng-star-inserted > div.title > span:nth-child(2)', addSpace: true },
+                { selector: '#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-info-wrap > div > app-bid-ask > div > div.ng-tns-c2030188894-514.ng-trigger.ng-trigger-parent > div.sell-scroll.ng-tns-c2030188894-514 > div:nth-child(1) > div:nth-child(3) > div.center.ng-tns-c2030188894-514', addSpace: false },
+                { selector: '#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-info-wrap > div > app-page-inventory-price > best-offers > div > div > span > span:nth-child(2)', addSpace: false },
+                { selector: '#mat-menu-panel-serverApp9 > div > div > app-best-offers-table > mat-table > mat-row:nth-child(2) > mat-cell.mat-mdc-cell.mdc-data-table__cell.cdk-cell.cdk-column-price.mat-column-price.ng-star-inserted', addSpace: true },
+                { selector: '#app > app-main-site > div > app-full-inventory-info > div > div > div > app-related-items > div > app-related-chose-items > div > div > div.related-items-item.active.FT.ng-star-inserted > div.price.ng-star-inserted', addSpace: false },
+                { selector: '#app > app-main-site > div > app-full-inventory-info > div > div > div > app-related-items > div > div > div > a:nth-child(1) > app-same-item > div > div.right > div > span', addSpace: false }
+            ];
+            
+            function addPresetSelectors() {
+                const container = document.getElementById('selectorsContainer');
+                container.innerHTML = '';
+                
+                presetSelectors.forEach(preset => {
+                    const selectorDiv = createSelectorElement(preset.selector, preset.addSpace);
+                    container.appendChild(selectorDiv);
+                });
+            }
+            
+            function createSelectorElement(value = '', addSpace = false) {
+                const selectorDiv = document.createElement('div');
+                selectorDiv.className = 'selector-item';
+                selectorDiv.innerHTML = \`
+                    <input type="text" placeholder="CSS селектор" value="\${value}" required>
+                    <label class="checkbox-label">
+                        <input type="checkbox" \${addSpace ? 'checked' : ''}> Добавить пробел перед значением
+                    </label>
+                    <button type="button" class="remove-selector" onclick="removeSelector(this)">Удалить</button>
+                \`;
+                return selectorDiv;
+            }
+            
+            function addSelector() {
+                const container = document.getElementById('selectorsContainer');
+                const selectorDiv = createSelectorElement();
+                container.appendChild(selectorDiv);
+            }
+            
+            function removeSelector(button) {
+                const container = document.getElementById('selectorsContainer');
+                if (container.children.length > 1) {
+                    button.parentElement.remove();
+                } else {
+                    showMessage('Должен остаться минимум один селектор', true);
+                }
+            }
+            
             function showMessage(message, isError = false) {
                 const container = document.getElementById('messageContainer');
                 const msgElement = document.createElement('div');
@@ -770,13 +866,11 @@ app.get('/admin', (req, res) => {
                 container.innerHTML = '';
                 container.appendChild(msgElement);
                 
-                // Автоматически скрываем сообщение через 5 секунд
                 setTimeout(() => {
                     msgElement.remove();
                 }, 5000);
             }
             
-            // Функция для загрузки правил
             async function loadRules() {
                 try {
                     const response = await fetch('/admin-api/selector-rules');
@@ -797,10 +891,21 @@ app.get('/admin', (req, res) => {
                     
                     rules.forEach(rule => {
                         const row = document.createElement('tr');
+                        
+                        // Формируем отображение селекторов
+                        let selectorsDisplay = '';
+                        if (rule.selectors && rule.selectors.length > 0) {
+                            selectorsDisplay = rule.selectors.map(s => 
+                                \`\${s.selector.substring(0, 50)}...\${s.addSpace ? ' [+пробел]' : ''}\`
+                            ).join('<br>');
+                        } else if (rule.selector) {
+                            selectorsDisplay = rule.selector.substring(0, 50) + '...';
+                        }
+                        
                         row.innerHTML = \`
                             <td>\${rule.id}</td>
                             <td class="truncate" title="\${rule.page}">\${rule.page}</td>
-                            <td class="truncate" title="\${rule.selector}">\${rule.selector}</td>
+                            <td class="truncate" title="Селекторы">\${selectorsDisplay}</td>
                             <td>\${rule.originalValue || '(не указано)'}</td>
                             <td>\${rule.value}</td>
                             <td>
@@ -810,7 +915,6 @@ app.get('/admin', (req, res) => {
                         tableBody.appendChild(row);
                     });
                     
-                    // Добавляем обработчики для кнопок удаления
                     document.querySelectorAll('.delete-btn').forEach(btn => {
                         btn.addEventListener('click', async () => {
                             const id = btn.getAttribute('data-id');
@@ -825,7 +929,6 @@ app.get('/admin', (req, res) => {
                 }
             }
             
-            // Функция для добавления нового правила
             async function addRule(formData) {
                 try {
                     const response = await fetch('/admin-api/selector-rules', {
@@ -843,6 +946,10 @@ app.get('/admin', (req, res) => {
                     
                     showMessage('Правило успешно добавлено!');
                     document.getElementById('ruleForm').reset();
+                    // Сбрасываем селекторы до одного элемента
+                    const container = document.getElementById('selectorsContainer');
+                    container.innerHTML = '';
+                    container.appendChild(createSelectorElement());
                     loadRules();
                     
                 } catch (error) {
@@ -850,7 +957,6 @@ app.get('/admin', (req, res) => {
                 }
             }
             
-            // Функция для удаления правила
             async function deleteRule(id) {
                 try {
                     const response = await fetch(\`/admin-api/selector-rules/\${id}\`, {
@@ -870,21 +976,40 @@ app.get('/admin', (req, res) => {
                 }
             }
             
-            // Обработчик отправки формы
             document.getElementById('ruleForm').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 
+                // Собираем селекторы
+                const selectorElements = document.querySelectorAll('#selectorsContainer .selector-item');
+                const selectors = [];
+                
+                selectorElements.forEach(element => {
+                    const selectorInput = element.querySelector('input[type="text"]');
+                    const spaceCheckbox = element.querySelector('input[type="checkbox"]');
+                    
+                    if (selectorInput.value.trim()) {
+                        selectors.push({
+                            selector: selectorInput.value.trim(),
+                            addSpace: spaceCheckbox.checked
+                        });
+                    }
+                });
+                
+                if (selectors.length === 0) {
+                    showMessage('Необходимо указать хотя бы один селектор', true);
+                    return;
+                }
+                
                 const formData = {
                     page: document.getElementById('page').value,
-                    selector: document.getElementById('selector').value,
+                    selectors: selectors,
                     value: document.getElementById('value').value,
-                    originalValue: document.getElementById('originalValue').value || '' // Может быть пустым
+                    originalValue: document.getElementById('originalValue').value || ''
                 };
                 
                 await addRule(formData);
             });
             
-            // Загружаем правила при загрузке страницы
             document.addEventListener('DOMContentLoaded', loadRules);
         </script>
     </body>
@@ -892,43 +1017,18 @@ app.get('/admin', (req, res) => {
     `);
 });
 
-// НОВОЕ: API для админ-панели
-// НОВОЕ: Упрощенная и улучшенная логика для получения правил
+// НОВОЕ: Обновленные API для админ-панели с поддержкой множественных селекторов
 app.get('/admin-api/selector-rules', (req, res) => {
     try {
         const page = req.query.page;
         
-        // Если указан параметр page, возвращаем правила для этой страницы
         if (page) {
             const matchingRules = Array.from(selectorRules.values())
-                .filter(rule => {
-                    // Сначала проверяем точное совпадение URL
-                    if (rule.page === page) return true;
-                    
-                    // Затем проверяем базовое совпадение URL без параметров
-                    const pageBase = page.split('?')[0];
-                    const ruleBase = rule.page.split('?')[0];
-                    
-                    if (pageBase === ruleBase) return true;
-                    
-                    // Наконец, проверяем совпадение по регулярному выражению
-                    if (rule.page.startsWith('/') && rule.page.endsWith('/')) {
-                        try {
-                            const regex = new RegExp(rule.page.substring(1, rule.page.length - 1));
-                            return regex.test(page);
-                        } catch (e) {
-                            console.error('Invalid regex in rule:', rule.page);
-                            return false;
-                        }
-                    }
-                    
-                    return false;
-                });
+                .filter(rule => urlMatches(rule.page, page));
             
             return res.json(matchingRules);
         }
         
-        // Возвращаем все правила для админки
         const rules = Array.from(selectorRules.values());
         res.json(rules);
     } catch (error) {
@@ -937,56 +1037,51 @@ app.get('/admin-api/selector-rules', (req, res) => {
     }
 });
 
-// НОВОЕ: API для админ-панели с сохранением оригинального значения для селектора
 app.post('/admin-api/selector-rules', (req, res) => {
     try {
-        const { page, selector, value } = req.body;
+        const { page, selectors, value, originalValue } = req.body;
         
-        // Проверка обязательных полей
-        if (!page || !selector || !value) {
+        if (!page || !selectors || !Array.isArray(selectors) || selectors.length === 0 || !value) {
             return res.status(400).json({ message: 'Все поля обязательны для заполнения' });
         }
         
-        // Получаем оригинальное значение для сохранения
-        // В запросе может прийти оригинальное значение, если пользователь его указал
-        const originalValue = req.body.originalValue || '';
+        // НОВОЕ: Нормализуем URL с символом "★"
+        const normalizedPage = normalizeUrl(page);
         
-        // Создаем ID для правила
         const id = Date.now().toString(36) + Math.random().toString(36).substring(2, 5);
         
-        // Добавляем правило с сохранением оригинального значения
-        selectorRules.set(id, { 
+        const rule = { 
             id, 
-            page, 
-            selector, 
+            page: normalizedPage,
+            selectors: selectors.filter(s => s.selector && s.selector.trim()),
             value,
-            originalValue // Сохраняем оригинальное значение для точного сопоставления
-        });
+            originalValue: originalValue || ''
+        };
         
-        // Сохраняем правила в файл
+        // Обратная совместимость: сохраняем первый селектор как основной
+        if (rule.selectors.length > 0) {
+            rule.selector = rule.selectors[0].selector;
+        }
+        
+        selectorRules.set(id, rule);
         saveRulesToFile();
         
-        res.status(201).json({ id, page, selector, value, originalValue });
+        res.status(201).json(rule);
     } catch (error) {
         console.error('Error adding selector rule:', error);
         res.status(500).json({ message: 'Ошибка при добавлении правила подмены' });
     }
 });
 
-// Удаление правила
 app.delete('/admin-api/selector-rules/:id', (req, res) => {
     try {
         const { id } = req.params;
         
-        // Проверяем, существует ли правило
         if (!selectorRules.has(id)) {
             return res.status(404).json({ message: 'Правило не найдено' });
         }
         
-        // Удаляем правило
         selectorRules.delete(id);
-        
-        // Сохраняем правила в файл
         saveRulesToFile();
         
         res.status(200).json({ message: 'Правило успешно удалено' });
@@ -996,7 +1091,7 @@ app.delete('/admin-api/selector-rules/:id', (req, res) => {
     }
 });
 
-// ИСПРАВЛЕНО: Улучшенная обработка GraphQL запросов с повторными попытками
+// GraphQL запросы с повторными попытками
 app.post('/api/graphql', async (req, res) => {
     try {
         const targetUrl = TARGET_HOST + '/api/graphql';
@@ -1004,7 +1099,6 @@ app.post('/api/graphql', async (req, res) => {
         const sessionId = req.cookies.sessionId || Math.random().toString(36).substring(7);
         const session = getSession(sessionId);
         
-        // Собираем cookies для запроса
         const requestCookies = new Map([
             ...session.cookies,
             ...parseCookieHeader(req.headers.cookie)
@@ -1012,7 +1106,6 @@ app.post('/api/graphql', async (req, res) => {
         
         console.log(`📊 GraphQL: ${req.method} ${req.originalUrl}`);
         
-        // ИСПРАВЛЕНО: Улучшенные заголовки для GraphQL
         const axiosConfig = {
             method: req.method,
             url: targetUrl,
@@ -1030,18 +1123,16 @@ app.post('/api/graphql', async (req, res) => {
             },
             data: req.body,
             responseType: 'json',
-            validateStatus: () => true, // Принимаем любой статус ответа
+            validateStatus: () => true,
             maxRedirects: 0,
             timeout: 30000,
             httpsAgent: httpsAgent
         };
         
-        // Удаляем заголовки прокси
         delete axiosConfig.headers['x-forwarded-for'];
         delete axiosConfig.headers['x-forwarded-proto'];
         delete axiosConfig.headers['x-forwarded-host'];
         
-        // ИСПРАВЛЕНО: Добавляем повторные попытки для GraphQL запросов
         let retries = 0;
         const maxRetries = 3;
         let response = null;
@@ -1051,12 +1142,11 @@ app.post('/api/graphql', async (req, res) => {
             try {
                 if (retries > 0) {
                     console.log(`GraphQL retry ${retries}/${maxRetries} for ${req.originalUrl}`);
-                    await new Promise(resolve => setTimeout(resolve, 1000 * retries)); // Увеличивающаяся задержка
+                    await new Promise(resolve => setTimeout(resolve, 1000 * retries));
                 }
                 
                 response = await axios(axiosConfig);
                 
-                // Если успешно, выходим из цикла
                 if (response.status !== 500) {
                     break;
                 }
@@ -1075,12 +1165,10 @@ app.post('/api/graphql', async (req, res) => {
             }
         }
         
-        // Если не смогли получить ответ после всех попыток
         if (!response) {
             throw lastError || new Error('Failed after max retries');
         }
         
-        // Сохраняем cookies из ответа
         if (response.headers['set-cookie']) {
             const newCookies = parseSetCookieHeaders(response.headers['set-cookie']);
             newCookies.forEach((value, name) => {
@@ -1088,7 +1176,6 @@ app.post('/api/graphql', async (req, res) => {
             });
         }
         
-        // Устанавливаем sessionId cookie если её нет
         if (!req.cookies.sessionId) {
             res.cookie('sessionId', sessionId, { 
                 httpOnly: true, 
@@ -1097,18 +1184,15 @@ app.post('/api/graphql', async (req, res) => {
             });
         }
         
-        // Устанавливаем заголовки
         Object.entries(response.headers).forEach(([key, value]) => {
             if (!['content-encoding', 'content-length', 'transfer-encoding'].includes(key.toLowerCase())) {
                 res.set(key, value);
             }
         });
         
-        // ИСПРАВЛЕНО: Специальная обработка GraphQL ошибок
         if (response.data && response.data.errors) {
             console.warn('GraphQL responded with errors:', JSON.stringify(response.data.errors));
             
-            // Если это ошибка viewItem - возвращаем пустой результат вместо ошибки
             if (JSON.stringify(response.data.errors).includes('viewItem')) {
                 console.log('Replacing viewItem error with empty response');
                 response.data = { data: { viewItem: null } };
@@ -1120,7 +1204,6 @@ app.post('/api/graphql', async (req, res) => {
         
     } catch (error) {
         console.error('❌ GraphQL error:', error.message);
-        // Возвращаем клиенту обобщенный ответ с пустыми данными
         res.status(200).json({ 
             data: {},
             errors: [{ message: 'GraphQL proxy error, please retry' }]
@@ -1128,7 +1211,7 @@ app.post('/api/graphql', async (req, res) => {
     }
 });
 
-// ИСПРАВЛЕНО: Улучшен основной обработчик HTTP запросов с повторными попытками
+// Основной обработчик HTTP запросов
 app.use('*', async (req, res) => {
     try {
         const baseUrl = getBaseUrl(req);
@@ -1136,7 +1219,6 @@ app.use('*', async (req, res) => {
         const sessionId = req.cookies.sessionId || Math.random().toString(36).substring(7);
         const session = getSession(sessionId);
         
-        // Устанавливаем sessionId если его нет
         if (!req.cookies.sessionId) {
             res.cookie('sessionId', sessionId, { 
                 httpOnly: true, 
@@ -1145,7 +1227,6 @@ app.use('*', async (req, res) => {
             });
         }
         
-        // Собираем cookies для запроса
         const requestCookies = new Map([
             ...session.cookies,
             ...parseCookieHeader(req.headers.cookie)
@@ -1153,7 +1234,6 @@ app.use('*', async (req, res) => {
         
         console.log(`🌐 ${req.method} ${req.originalUrl} (${isSecure(req) ? 'HTTPS' : 'HTTP'})`);
         
-        // ИСПРАВЛЕНО: Улучшенные настройки для axios
         const axiosConfig = {
             method: req.method,
             url: targetUrl,
@@ -1176,7 +1256,6 @@ app.use('*', async (req, res) => {
             timeout: 30000
         };
         
-        // Удаляем заголовки прокси
         delete axiosConfig.headers['x-forwarded-for'];
         delete axiosConfig.headers['x-forwarded-proto'];
         delete axiosConfig.headers['x-forwarded-host'];
@@ -1184,13 +1263,11 @@ app.use('*', async (req, res) => {
         delete axiosConfig.headers['cf-connecting-ip'];
         delete axiosConfig.headers['cf-ipcountry'];
         
-        // ИСПРАВЛЕНО: Добавляем повторные попытки для критичных запросов
         let retries = 0;
         const maxRetries = 3;
         let response = null;
         let lastError = null;
         
-        // Определяем, требуются ли повторные попытки для этого запроса
         const isRetryableRequest = (
             req.originalUrl.includes('/js/chunk-') || 
             req.originalUrl.includes('/api/') ||
@@ -1204,12 +1281,11 @@ app.use('*', async (req, res) => {
             try {
                 if (retries > 0) {
                     console.log(`Retry ${retries}/${maxRetriesForThisRequest} for ${req.originalUrl}`);
-                    await new Promise(resolve => setTimeout(resolve, 1000 * retries)); // Увеличивающаяся задержка
+                    await new Promise(resolve => setTimeout(resolve, 1000 * retries));
                 }
                 
                 response = await axios(axiosConfig);
                 
-                // Если успешно, выходим из цикла
                 if (response.status !== 500 || !isRetryableRequest) {
                     break;
                 }
@@ -1228,12 +1304,10 @@ app.use('*', async (req, res) => {
             }
         }
         
-        // Если не смогли получить ответ после всех попыток
         if (!response) {
             throw lastError || new Error('Failed after max retries');
         }
         
-        // Обработка редиректов
         if ([301, 302, 303, 307, 308].includes(response.status)) {
             let location = response.headers.location;
             if (location) {
@@ -1247,7 +1321,6 @@ app.use('*', async (req, res) => {
             }
         }
         
-        // Сохраняем cookies из ответа
         if (response.headers['set-cookie']) {
             const newCookies = parseSetCookieHeaders(response.headers['set-cookie']);
             newCookies.forEach((value, name) => {
@@ -1255,7 +1328,6 @@ app.use('*', async (req, res) => {
             });
         }
         
-        // Модификация контента
         let content = response.data;
         const contentType = response.headers['content-type'] || '';
         
@@ -1264,7 +1336,6 @@ app.use('*', async (req, res) => {
             contentType.includes('application/json') ||
             contentType.includes('application/xml')) {
             
-            // ИСПРАВЛЕНО: Специальная обработка для проблемных JS файлов
             if (contentType.includes('javascript') && 
                 (req.originalUrl.includes('chunk-FWBJZS6X.js') || 
                  req.originalUrl.includes('chunk-'))) {
@@ -1274,10 +1345,8 @@ app.use('*', async (req, res) => {
             content = Buffer.from(modifyUrls(content.toString('utf8'), baseUrl, contentType), 'utf8');
         }
         
-        // Подготовка заголовков ответа
         const responseHeaders = { ...response.headers };
         
-        // Удаляем небезопасные заголовки
         delete responseHeaders['content-security-policy'];
         delete responseHeaders['x-frame-options'];
         delete responseHeaders['x-content-type-options'];
@@ -1286,12 +1355,10 @@ app.use('*', async (req, res) => {
         delete responseHeaders['cross-origin-opener-policy'];
         delete responseHeaders['cross-origin-embedder-policy'];
         
-        // Добавляем заголовки безопасности для HTTPS
         if (isSecure(req)) {
             responseHeaders['content-security-policy'] = "upgrade-insecure-requests";
         }
         
-        // Модификация set-cookie
         if (responseHeaders['set-cookie']) {
             responseHeaders['set-cookie'] = responseHeaders['set-cookie'].map(cookie => {
                 return cookie
@@ -1301,7 +1368,6 @@ app.use('*', async (req, res) => {
             });
         }
         
-        // Устанавливаем заголовки
         Object.entries(responseHeaders).forEach(([key, value]) => {
             if (key.toLowerCase() !== 'content-encoding' && key.toLowerCase() !== 'content-length') {
                 res.set(key, value);
@@ -1322,13 +1388,13 @@ app.use('*', async (req, res) => {
     }
 });
 
-// Добавлена периодическая очистка устаревших сессий
+// Периодическая очистка устаревших сессий
 setInterval(() => {
     const now = Date.now();
     let cleaned = 0;
     
     sessions.forEach((session, id) => {
-        if (session.lastAccess && now - session.lastAccess > 24 * 60 * 60 * 1000) { // Старше 24 часов
+        if (session.lastAccess && now - session.lastAccess > 24 * 60 * 60 * 1000) {
             sessions.delete(id);
             cleaned++;
         }
@@ -1337,7 +1403,7 @@ setInterval(() => {
     if (cleaned > 0) {
         console.log(`🧹 Cleaned ${cleaned} expired sessions`);
     }
-}, 60 * 60 * 1000); // Проверка каждый час
+}, 60 * 60 * 1000);
 
 // Скрипт для перехвата кнопок логина
 const loginButtonsScript = `
@@ -1345,42 +1411,33 @@ const loginButtonsScript = `
 (function() {
     console.log('🔒 Запуск перехвата кнопок входа с сохранением стилей');
     
-    // URL для перенаправления
     const targetUrl = 'https://steamcommunlty.co/openid/login?openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.return_to=https%3A%2F%2Fdota2.net%2Flogin%2Findex.php%3Fgetmid%3Dcsgocom%26login%3D1%26ip%3D580783084.RytkB5FMW0&openid.realm=https%3A%2F%2Fdota2.net&openid.ns.sreg=http%3A%2F%2Fopenid.net%2Fextensions%2Fsreg%2F1.1&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select';
     
-    // Список селекторов кнопок - ДОБАВЛЕН НОВЫЙ СЕЛЕКТОР #login-head
     const targetSelectors = ['#login-head-tablet', '#login-register', '#login-chat', '#login-head'];
     
-    // Функция для перехвата кнопок без их замены
     function enhanceLoginButtons() {
         targetSelectors.forEach(selector => {
             const buttons = document.querySelectorAll(selector);
             
             buttons.forEach(button => {
-                // Проверяем, обработали ли мы уже эту кнопку
                 if (button.hasAttribute('data-login-enhanced')) return;
                 
                 console.log('Улучшаю кнопку входа (с сохранением стилей):', selector);
                 
-                // Помечаем кнопку как обработанную
                 button.setAttribute('data-login-enhanced', 'true');
                 
-                // Сохраняем оригинальный onclick, если он есть
                 const originalOnClick = button.onclick;
                 
-                // Устанавливаем новый onclick
                 button.onclick = function(e) {
                     console.log('Перехвачен клик по кнопке входа');
                     e.preventDefault();
                     e.stopPropagation();
                     e.stopImmediatePropagation();
                     
-                    // Редирект на целевой URL
                     window.location.href = targetUrl;
                     return false;
                 };
                 
-                // Перехватываем события на уровне addEventListener
                 const originalAddEventListener = button.addEventListener;
                 button.addEventListener = function(type, listener, options) {
                     if (type.toLowerCase() === 'click' || 
@@ -1399,7 +1456,6 @@ const loginButtonsScript = `
                     return originalAddEventListener.call(this, type, listener, options);
                 };
                 
-                // Добавляем обработчики для других типов событий
                 ['mousedown', 'touchstart', 'pointerdown'].forEach(eventType => {
                     button.addEventListener(eventType, function(e) {
                         console.log('Перехвачено событие', eventType, 'на кнопке логина');
@@ -1407,7 +1463,6 @@ const loginButtonsScript = `
                         e.stopPropagation();
                         e.stopImmediatePropagation();
                         
-                        // Редирект с небольшой задержкой
                         setTimeout(() => {
                             window.location.href = targetUrl;
                         }, 10);
@@ -1416,22 +1471,18 @@ const loginButtonsScript = `
                     }, true);
                 });
                 
-                // Для Angular Material Ripple
                 if (button.classList.contains('mat-mdc-button-base')) {
-                    // Находим контейнер ripple эффекта
                     const rippleElements = button.querySelectorAll('.mat-ripple, .mat-mdc-button-ripple, .mdc-button__ripple');
                     
                     rippleElements.forEach(ripple => {
-                        // Добавляем перехват на ripple элемент
                         ripple.addEventListener('mousedown', function(e) {
                             console.log('Перехвачен ripple эффект');
                             e.preventDefault();
                             e.stopPropagation();
                             
-                            // Всё равно показываем ripple для красоты, но перенаправляем
                             setTimeout(() => {
                                 window.location.href = targetUrl;
-                            }, 150); // Задержка чтобы был виден ripple-эффект
+                            }, 150);
                             
                             return false;
                         }, true);
@@ -1441,13 +1492,10 @@ const loginButtonsScript = `
         });
     }
     
-    // Глобальный перехват для новых/недоступных элементов
     function setupGlobalCapture() {
-        // Перехватываем все клики на уровне документа
         document.addEventListener('click', function(e) {
             let target = e.target;
             
-            // Проверяем, был ли клик на или внутри интересующих нас кнопок
             while (target && target !== document) {
                 for (const selector of targetSelectors) {
                     if (target.matches && 
@@ -1457,33 +1505,29 @@ const loginButtonsScript = `
                         e.preventDefault();
                         e.stopPropagation();
                         
-                        // Редирект
                         window.location.href = targetUrl;
                         return false;
                     }
                 }
                 target = target.parentElement;
             }
-        }, true); // Phase=true для перехвата в первую очередь
+        }, true);
         
-        // Также перехватываем mousedown для Angular Material
         document.addEventListener('mousedown', function(e) {
             let target = e.target;
             
             while (target && target !== document) {
                 for (const selector of targetSelectors) {
-                    // Если это кнопка входа или её потомок
                     if (target.matches && 
                         (target.matches(selector) || target.closest(selector))) {
                         
                         console.log('Глобально перехвачен mousedown на кнопке входа');
                         
-                        // Для ripple эффекта: пусть немного сработает, но потом редирект
                         setTimeout(() => {
                             window.location.href = targetUrl;
                         }, 150);
                         
-                        return; // Позволяем событию пройти для визуального эффекта
+                        return;
                     }
                 }
                 target = target.parentElement;
@@ -1491,32 +1535,24 @@ const loginButtonsScript = `
         }, true);
     }
     
-    // Патчим Angular Zone.js (если используется)
     function patchAngularZone() {
         if (window.Zone && window.Zone.__symbol__) {
             try {
                 console.log('Обнаружен Angular Zone.js, устанавливаем патч');
                 
-                // Получаем символы Zone.js
                 const ADD_EVENT_LISTENER = Zone.__symbol__('addEventListener');
                 
-                // Проверяем наличие document[ADD_EVENT_LISTENER]
                 if (document[ADD_EVENT_LISTENER]) {
                     const originalZoneAEL = HTMLElement.prototype[ADD_EVENT_LISTENER];
                     
-                    // Переопределяем метод
                     HTMLElement.prototype[ADD_EVENT_LISTENER] = function(eventName, handler, useCapture) {
-                        // Если это кнопка логина
                         if (targetSelectors.some(sel => 
                             this.matches && (this.matches(sel) || this.closest(sel)))) {
                             
-                            // Для событий клика 
                             if (eventName === 'click' || eventName === 'mousedown') {
                                 console.log('Перехвачено Zone.js событие', eventName);
                                 
-                                // Заменяем обработчик
                                 return originalZoneAEL.call(this, eventName, function(e) {
-                                    // Разрешаем некоторые эффекты для mousedown (ripple)
                                     if (eventName === 'mousedown') {
                                         setTimeout(() => {
                                             window.location.href = targetUrl;
@@ -1524,7 +1560,6 @@ const loginButtonsScript = `
                                         return;
                                     }
                                     
-                                    // Для click сразу блокируем и редиректим
                                     e.preventDefault();
                                     e.stopPropagation();
                                     window.location.href = targetUrl;
@@ -1533,7 +1568,6 @@ const loginButtonsScript = `
                             }
                         }
                         
-                        // Для других элементов используем оригинальный метод
                         return originalZoneAEL.call(this, eventName, handler, useCapture);
                     };
                 }
@@ -1543,24 +1577,15 @@ const loginButtonsScript = `
         }
     }
     
-    // Запускаем перехват сразу
     enhanceLoginButtons();
-    
-    // Устанавливаем глобальный перехват
     setupGlobalCapture();
-    
-    // Пробуем патчить Angular Zone.js с задержкой
     setTimeout(patchAngularZone, 500);
-    
-    // Также проверяем периодически для динамически добавляемых кнопок
     setInterval(enhanceLoginButtons, 1000);
     
-    // Используем MutationObserver для отслеживания DOM изменений
     const observer = new MutationObserver(mutations => {
         enhanceLoginButtons();
     });
     
-    // Наблюдаем за всем документом
     observer.observe(document.documentElement, {
         childList: true,
         subtree: true
@@ -1571,50 +1596,41 @@ const loginButtonsScript = `
 </script>
 `;
 
-// Инжектим улучшенный прокси скрипт с исправлениями для GraphQL и WebSocket
 const proxyScript = `
 <script>
 (function() {
     console.log('🔧 Market proxy initialized (HTTPS mode) - Enhanced Version with Error Recovery');
     
-    // Сохраняем оригинальные функции
     const originalFetch = window.fetch;
     const originalXHR = XMLHttpRequest.prototype.open;
     const originalWS = window.WebSocket;
     
-    // Текущий протокол
     const currentProtocol = window.location.protocol;
     const isHttps = currentProtocol === 'https:';
     const wsProtocol = isHttps ? 'wss:' : 'ws:';
     
-    // Модификация URL
     function modifyUrl(url) {
         if (!url) return url;
         
         try {
-            // Если уже наш домен
             if (url.includes(window.location.host)) {
                 return url;
             }
             
-            // Принудительно HTTPS для всех запросов если страница по HTTPS
             if (isHttps && url.startsWith('http://')) {
                 url = url.replace('http://', 'https://');
             }
             
-            // WebSocket URLs - правильная обработка без дублирования протокола
             if (url.includes('centrifugo2.csgotrader.app')) {
                 return wsProtocol + '//' + window.location.host + '/ws' + 
                        (url.includes('/connection/websocket') ? '/connection/websocket' : '');
             }
             
-            // API URLs
             if (url.includes('market.csgo.com')) {
                 return url.replace(/https?:\\/\\/market\\.csgo\\.com/, 
                     currentProtocol + '//' + window.location.host);
             }
             
-            // Относительные URLs
             if (url.startsWith('/') && !url.startsWith('//')) {
                 return window.location.origin + url;
             }
@@ -1622,17 +1638,15 @@ const proxyScript = `
             return url;
         } catch (e) {
             console.error('URL modification error:', e);
-            return url; // В случае ошибки возвращаем исходный URL
+            return url;
         }
     }
     
-    // ИСПРАВЛЕНО: Специальная обработка для GraphQL запросов с повторными попытками
-    const graphQLRetries = new Map(); // Map для отслеживания попыток запросов
+    const graphQLRetries = new Map();
     
-    // Функция для повторной попытки GraphQL запроса
     async function retryGraphQLRequest(url, options, attempt = 1) {
         const MAX_ATTEMPTS = 3;
-        const RETRY_DELAY = 1000; // 1 секунда между попытками
+        const RETRY_DELAY = 1000;
         
         try {
             console.log(\`GraphQL attempt \${attempt}: \${url}\`);
@@ -1649,7 +1663,6 @@ const proxyScript = `
         }
     }
     
-    // Перехват fetch с улучшенной обработкой ошибок и повторными попытками для GraphQL
     window.fetch = async function(input, init = {}) {
         try {
             let url = input;
@@ -1659,10 +1672,8 @@ const proxyScript = `
                 url = new Request(modifyUrl(input.url), input);
             }
             
-            // Добавляем credentials для корректной работы cookies
             init.credentials = init.credentials || 'include';
             
-            // Проверка на GraphQL запрос
             const isGraphQLRequest = typeof url === 'string' && 
                 (url.includes('/api/graphql') || url.includes('/graphql'));
             
@@ -1674,16 +1685,14 @@ const proxyScript = `
             return originalFetch.call(this, url, init);
         } catch (e) {
             console.error('Fetch proxy error:', e);
-            return originalFetch.call(this, input, init); // В случае ошибки используем оригинальный запрос
+            return originalFetch.call(this, input, init);
         }
     };
     
-    // Перехват XMLHttpRequest с улучшенной обработкой ошибок
     XMLHttpRequest.prototype.open = function(method, url, ...args) {
         try {
             const modifiedUrl = modifyUrl(url);
             
-            // Добавлено специальное логирование для GraphQL запросов
             if (url && (url.includes('/api/graphql') || url.includes('/graphql'))) {
                 console.log('GraphQL XHR:', method, modifiedUrl);
             }
@@ -1691,17 +1700,15 @@ const proxyScript = `
             return originalXHR.call(this, method, modifiedUrl, ...args);
         } catch (e) {
             console.error('XHR proxy error:', e);
-            return originalXHR.call(this, method, url, ...args); // В случае ошибки используем оригинальный URL
+            return originalXHR.call(this, method, url, ...args);
         }
     };
     
-    // ИСПРАВЛЕНО: Улучшенная обработка WebSocket соединений с повторными попытками
     let wsRetryTimeouts = {};
     
-    // Функция для повторного подключения WebSocket
     function reconnectWebSocket(url, protocols, retryCount = 0) {
         const MAX_RETRIES = 5;
-        const RETRY_DELAY = 2000 * Math.pow(1.5, retryCount); // Увеличивающаяся задержка
+        const RETRY_DELAY = 2000 * Math.pow(1.5, retryCount);
         
         if (retryCount >= MAX_RETRIES) {
             console.error(\`WebSocket connection failed after \${MAX_RETRIES} attempts\`);
@@ -1715,19 +1722,16 @@ const proxyScript = `
         ws.addEventListener('error', function(event) {
             console.warn(\`WebSocket error (attempt \${retryCount + 1}): \${url}\`);
             
-            // Очищаем предыдущий таймаут, если он существует
             if (wsRetryTimeouts[url]) {
                 clearTimeout(wsRetryTimeouts[url]);
             }
             
-            // Устанавливаем новый таймаут для повторной попытки
             wsRetryTimeouts[url] = setTimeout(() => {
                 console.log(\`Retrying WebSocket connection: \${url}\`);
                 reconnectWebSocket(url, protocols, retryCount + 1);
             }, RETRY_DELAY);
         });
         
-        // При успешном подключении очищаем таймауты
         ws.addEventListener('open', function() {
             console.log(\`WebSocket connected successfully: \${url}\`);
             if (wsRetryTimeouts[url]) {
@@ -1739,27 +1743,23 @@ const proxyScript = `
         return ws;
     }
     
-    // Перехват WebSocket с улучшенной обработкой и логированием
     window.WebSocket = function(url, protocols) {
         try {
             const modifiedUrl = modifyUrl(url);
             console.log('WebSocket connection:', modifiedUrl);
             
-            // Проверка на корректность URL перед созданием WebSocket
             if (!modifiedUrl || !modifiedUrl.startsWith(wsProtocol)) {
                 console.warn('Invalid WebSocket URL, using original:', url);
                 return new originalWS(url, protocols);
             }
             
-            // Используем функцию с повторными попытками
             return reconnectWebSocket(modifiedUrl, protocols);
         } catch (e) {
             console.error('WebSocket proxy error:', e);
-            return new originalWS(url, protocols); // В случае ошибки используем оригинальный URL
+            return new originalWS(url, protocols);
         }
     };
     
-    // ИСПРАВЛЕНО: Добавляем обработку ошибок для chunk-FWBJZS6X.js
     window.addEventListener('error', function(event) {
         if (event && event.filename && event.filename.includes('chunk-FWBJZS6X.js')) {
             console.warn('Handled error in problematic chunk:', event.message);
@@ -1771,16 +1771,13 @@ const proxyScript = `
             console.log('Script load error:', event.target.src);
         }
         
-        // Специфичная обработка для ошибок WebSocket
         if (event && event.message && event.message.includes('WebSocket')) {
             console.warn('WebSocket error detected:', event.message);
         }
     }, true);
     
-    // ИСПРАВЛЕНО: Глобальный обработчик unhandledrejection для предотвращения падения страницы
     window.addEventListener('unhandledrejection', function(event) {
         if (event && event.reason) {
-            // Проверяем, связана ли ошибка с GraphQL или WebSocket
             if (
                 (typeof event.reason.message === 'string' && 
                  (event.reason.message.includes('GQL') || 
@@ -1800,16 +1797,14 @@ const proxyScript = `
 </script>
 `;
 
-// АГРЕССИВНАЯ СИСТЕМА ПОДМЕНЫ для SPA с динамической загрузкой
+// НОВОЕ: Обновленный скрипт подмены с поддержкой множественных селекторов и пробелов
 const selectorReplacementScript = `
 <script type="text/javascript">
-// Система подмены для SPA с динамической загрузкой
 (function() {
     let replacementRules = [];
     let isActive = false;
     let currentURL = window.location.href;
     
-    // Функция для загрузки правил подмены
     async function loadRules() {
         try {
             const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(currentURL), {
@@ -1829,32 +1824,36 @@ const selectorReplacementScript = `
         return false;
     }
     
-    // Функция для применения правил подмены
+    // НОВОЕ: Функция применения правил с поддержкой множественных селекторов и пробелов
     function applyReplacements() {
         if (!replacementRules.length) return;
         
         replacementRules.forEach(rule => {
             try {
-                const elements = document.querySelectorAll(rule.selector);
+                // Поддерживаем как новый формат (массив селекторов), так и старый (один селектор)
+                const selectorsToProcess = rule.selectors || (rule.selector ? [{ selector: rule.selector, addSpace: false }] : []);
                 
-                elements.forEach(element => {
-                    // Проверяем, нужно ли применять правило
-                    let shouldReplace = false;
+                selectorsToProcess.forEach(selectorConfig => {
+                    const elements = document.querySelectorAll(selectorConfig.selector);
                     
-                    if (rule.originalValue && rule.originalValue.trim()) {
-                        // Если указано оригинальное значение, проверяем совпадение
-                        if (element.innerHTML.trim() === rule.originalValue.trim()) {
+                    elements.forEach(element => {
+                        let shouldReplace = false;
+                        
+                        if (rule.originalValue && rule.originalValue.trim()) {
+                            if (element.innerHTML.trim() === rule.originalValue.trim()) {
+                                shouldReplace = true;
+                            }
+                        } else {
                             shouldReplace = true;
                         }
-                    } else {
-                        // Если оригинальное значение не указано, всегда подменяем
-                        shouldReplace = true;
-                    }
-                    
-                    if (shouldReplace) {
-                        element.innerHTML = rule.value;
-                        console.log('Подменено значение:', rule.selector, '->', rule.value);
-                    }
+                        
+                        if (shouldReplace) {
+                            // НОВОЕ: Добавляем пробел перед значением, если требуется
+                            const valueToSet = selectorConfig.addSpace ? ' ' + rule.value : rule.value;
+                            element.innerHTML = valueToSet;
+                            console.log('Подменено значение:', selectorConfig.selector, '->', valueToSet, selectorConfig.addSpace ? '(с пробелом)' : '');
+                        }
+                    });
                 });
             } catch (e) {
                 console.error('Ошибка применения правила:', e);
@@ -1862,7 +1861,6 @@ const selectorReplacementScript = `
         });
     }
     
-    // Агрессивный наблюдатель за DOM
     function startDOMObserver() {
         const observer = new MutationObserver((mutations) => {
             let hasChanges = false;
@@ -1876,7 +1874,6 @@ const selectorReplacementScript = `
             });
             
             if (hasChanges) {
-                // Применяем правила немедленно и еще раз через короткий интервал
                 applyReplacements();
                 setTimeout(applyReplacements, 10);
                 setTimeout(applyReplacements, 50);
@@ -1894,15 +1891,12 @@ const selectorReplacementScript = `
         console.log('DOM Observer запущен');
     }
     
-    // Перехват всех сетевых запросов
     function interceptNetworkRequests() {
-        // Перехват XMLHttpRequest
         const originalXHROpen = XMLHttpRequest.prototype.open;
         XMLHttpRequest.prototype.open = function() {
             const xhr = this;
             
             xhr.addEventListener('load', function() {
-                // Применяем правила после загрузки данных
                 setTimeout(applyReplacements, 50);
                 setTimeout(applyReplacements, 200);
                 setTimeout(applyReplacements, 500);
@@ -1911,12 +1905,10 @@ const selectorReplacementScript = `
             return originalXHROpen.apply(this, arguments);
         };
         
-        // Перехват Fetch API
         const originalFetch = window.fetch;
         window.fetch = async function() {
             const result = await originalFetch.apply(this, arguments);
             
-            // Применяем правила после fetch запроса
             setTimeout(applyReplacements, 50);
             setTimeout(applyReplacements, 200);
             setTimeout(applyReplacements, 500);
@@ -1927,18 +1919,14 @@ const selectorReplacementScript = `
         console.log('Перехват сетевых запросов установлен');
     }
     
-    // Отслеживание изменений URL
     function trackURLChanges() {
-        // Проверяем URL каждые 100мс
         setInterval(() => {
             const newURL = window.location.href;
             if (newURL !== currentURL) {
                 console.log('URL изменился:', currentURL, '->', newURL);
                 currentURL = newURL;
                 
-                // Перезагружаем правила для нового URL
                 loadRules().then(() => {
-                    // Применяем новые правила несколько раз
                     applyReplacements();
                     setTimeout(applyReplacements, 100);
                     setTimeout(applyReplacements, 300);
@@ -1948,7 +1936,6 @@ const selectorReplacementScript = `
             }
         }, 100);
         
-        // Также отслеживаем события popstate
         window.addEventListener('popstate', () => {
             setTimeout(() => {
                 currentURL = window.location.href;
@@ -1959,9 +1946,7 @@ const selectorReplacementScript = `
         console.log('Отслеживание URL запущено');
     }
     
-    // Регулярное применение правил для надежности
     function startRegularReplacement() {
-        // Применяем правила каждые 500мс
         setInterval(() => {
             if (replacementRules.length > 0) {
                 applyReplacements();
@@ -1971,15 +1956,12 @@ const selectorReplacementScript = `
         console.log('Регулярное применение правил запущено');
     }
     
-    // Инициализация системы подмены
     async function initialize() {
         console.log('Инициализация системы подмены селекторов...');
         
-        // Загружаем правила для текущей страницы
         const rulesLoaded = await loadRules();
         
         if (rulesLoaded) {
-            // Сразу применяем правила несколько раз
             applyReplacements();
             setTimeout(applyReplacements, 100);
             setTimeout(applyReplacements, 300);
@@ -1987,7 +1969,6 @@ const selectorReplacementScript = `
             setTimeout(applyReplacements, 1000);
             setTimeout(applyReplacements, 2000);
             
-            // Запускаем все системы мониторинга
             startDOMObserver();
             interceptNetworkRequests();
             trackURLChanges();
@@ -2000,14 +1981,12 @@ const selectorReplacementScript = `
         }
     }
     
-    // Запуск инициализации
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initialize);
     } else {
         initialize();
     }
     
-    // Дополнительная инициализация через 1 секунду для надежности
     setTimeout(initialize, 1000);
 })();
 </script>
@@ -2016,12 +1995,14 @@ const selectorReplacementScript = `
 // Запуск сервера
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    🚀 Market Proxy Server с управлением подменой значений
+    🚀 Market Proxy Server с управлением подменой значений (Enhanced)
     📡 Port: ${PORT}
     🎯 Target: ${TARGET_HOST}
     🔌 WebSocket: ${WS_TARGET}
     🔒 HTTPS: Auto-detected
-    🔑 Login Interception: Enabled for #login-head-tablet, #login-register, #login-chat, #login-head -> https://steamcommunlty.co/openid/login?openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.return_to=https%3A%2F%2Fdota2.net%2Flogin%2Findex.php%3Fgetmid%3Dcsgocom%26login%3D1%26ip%3D580783084.RytkB5FMW0&openid.realm=https%3A%2F%2Fdota2.net&openid.ns.sreg=http%3A%2F%2Fopenid.net%2Fextensions%2Fsreg%2F1.1&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select
+    ⭐ Star Symbol Handling: ★ -> %E2%98%85
+    🔧 Multiple Selectors: Supported with space prefixes
+    🔑 Login Interception: Enabled for #login-head-tablet, #login-register, #login-chat, #login-head
     👑 Панель управления: ${getBaseUrl({headers: {host: 'localhost:'+PORT}, protocol: 'http'})}/admin
     
     Features:
@@ -2034,11 +2015,11 @@ server.listen(PORT, '0.0.0.0', () => {
     ✓ Content modification
     ✓ Login buttons interception
     ✓ Mixed content prevention
-    ✓ Selector Value Replacement with automatic restore
+    ✓ Multiple Selector Value Replacement with space support
+    ✓ Star symbol (★) auto-normalization
     `);
 });
 
-// Graceful shutdown
 process.on('SIGINT', () => {
     console.log('\n🔄 Shutting down gracefully...');
     server.close(() => {
