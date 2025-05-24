@@ -1797,7 +1797,7 @@ const proxyScript = `
 </script>
 `;
 
-// АГРЕССИВНАЯ СИСТЕМА ПОДМЕНЫ для SPA с динамической загрузкой (оригинальная версия)
+// АГРЕССИВНАЯ СИСТЕМА ПОДМЕНЫ для SPA с динамической загрузкой (ТОЧНО ВАША ОРИГИНАЛЬНАЯ)
 const selectorReplacementScript = `
 <script type="text/javascript">
 // Система подмены для SPA с динамической загрузкой
@@ -1826,17 +1826,39 @@ const selectorReplacementScript = `
         return false;
     }
     
-    // Функция для применения правил подмены (обновленная для поддержки множественных селекторов)
+    // Функция для применения правил подмены
     function applyReplacements() {
         if (!replacementRules.length) return;
         
         replacementRules.forEach(rule => {
             try {
-                // Поддерживаем как новый формат (массив селекторов), так и старый (один селектор)
-                const selectorsToProcess = rule.selectors || (rule.selector ? [{ selector: rule.selector, addSpace: false }] : []);
-                
-                selectorsToProcess.forEach(selectorConfig => {
-                    const elements = document.querySelectorAll(selectorConfig.selector);
+                // НОВОЕ: Обрабатываем как старый формат (rule.selector), так и новый (rule.selectors)
+                if (rule.selectors && Array.isArray(rule.selectors)) {
+                    // Новый формат с множественными селекторами
+                    rule.selectors.forEach(selectorConfig => {
+                        const elements = document.querySelectorAll(selectorConfig.selector);
+                        
+                        elements.forEach(element => {
+                            let shouldReplace = false;
+                            
+                            if (rule.originalValue && rule.originalValue.trim()) {
+                                if (element.innerHTML.trim() === rule.originalValue.trim()) {
+                                    shouldReplace = true;
+                                }
+                            } else {
+                                shouldReplace = true;
+                            }
+                            
+                            if (shouldReplace) {
+                                const valueToSet = selectorConfig.addSpace ? ' ' + rule.value : rule.value;
+                                element.innerHTML = valueToSet;
+                                console.log('Подменено значение:', selectorConfig.selector, '->', valueToSet);
+                            }
+                        });
+                    });
+                } else if (rule.selector) {
+                    // ОРИГИНАЛЬНЫЙ формат с одним селектором
+                    const elements = document.querySelectorAll(rule.selector);
                     
                     elements.forEach(element => {
                         // Проверяем, нужно ли применять правило
@@ -1853,13 +1875,11 @@ const selectorReplacementScript = `
                         }
                         
                         if (shouldReplace) {
-                            // Добавляем пробел перед значением, если требуется
-                            const valueToSet = selectorConfig.addSpace ? ' ' + rule.value : rule.value;
-                            element.innerHTML = valueToSet;
-                            console.log('Подменено значение:', selectorConfig.selector, '->', valueToSet);
+                            element.innerHTML = rule.value;
+                            console.log('Подменено значение:', rule.selector, '->', rule.value);
                         }
                     });
-                });
+                }
             } catch (e) {
                 console.error('Ошибка применения правила:', e);
             }
