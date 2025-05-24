@@ -1797,14 +1797,16 @@ const proxyScript = `
 </script>
 `;
 
-// НОВОЕ: Обновленный скрипт подмены с поддержкой множественных селекторов и пробелов
+// АГРЕССИВНАЯ СИСТЕМА ПОДМЕНЫ для SPA с динамической загрузкой (оригинальная версия)
 const selectorReplacementScript = `
 <script type="text/javascript">
+// Система подмены для SPA с динамической загрузкой
 (function() {
     let replacementRules = [];
     let isActive = false;
     let currentURL = window.location.href;
     
+    // Функция для загрузки правил подмены
     async function loadRules() {
         try {
             const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(currentURL), {
@@ -1824,7 +1826,7 @@ const selectorReplacementScript = `
         return false;
     }
     
-    // НОВОЕ: Функция применения правил с поддержкой множественных селекторов и пробелов
+    // Функция для применения правил подмены (обновленная для поддержки множественных селекторов)
     function applyReplacements() {
         if (!replacementRules.length) return;
         
@@ -1837,21 +1839,24 @@ const selectorReplacementScript = `
                     const elements = document.querySelectorAll(selectorConfig.selector);
                     
                     elements.forEach(element => {
+                        // Проверяем, нужно ли применять правило
                         let shouldReplace = false;
                         
                         if (rule.originalValue && rule.originalValue.trim()) {
+                            // Если указано оригинальное значение, проверяем совпадение
                             if (element.innerHTML.trim() === rule.originalValue.trim()) {
                                 shouldReplace = true;
                             }
                         } else {
+                            // Если оригинальное значение не указано, всегда подменяем
                             shouldReplace = true;
                         }
                         
                         if (shouldReplace) {
-                            // НОВОЕ: Добавляем пробел перед значением, если требуется
+                            // Добавляем пробел перед значением, если требуется
                             const valueToSet = selectorConfig.addSpace ? ' ' + rule.value : rule.value;
                             element.innerHTML = valueToSet;
-                            console.log('Подменено значение:', selectorConfig.selector, '->', valueToSet, selectorConfig.addSpace ? '(с пробелом)' : '');
+                            console.log('Подменено значение:', selectorConfig.selector, '->', valueToSet);
                         }
                     });
                 });
@@ -1861,6 +1866,7 @@ const selectorReplacementScript = `
         });
     }
     
+    // Агрессивный наблюдатель за DOM
     function startDOMObserver() {
         const observer = new MutationObserver((mutations) => {
             let hasChanges = false;
@@ -1874,6 +1880,7 @@ const selectorReplacementScript = `
             });
             
             if (hasChanges) {
+                // Применяем правила немедленно и еще раз через короткий интервал
                 applyReplacements();
                 setTimeout(applyReplacements, 10);
                 setTimeout(applyReplacements, 50);
@@ -1891,12 +1898,15 @@ const selectorReplacementScript = `
         console.log('DOM Observer запущен');
     }
     
+    // Перехват всех сетевых запросов
     function interceptNetworkRequests() {
+        // Перехват XMLHttpRequest
         const originalXHROpen = XMLHttpRequest.prototype.open;
         XMLHttpRequest.prototype.open = function() {
             const xhr = this;
             
             xhr.addEventListener('load', function() {
+                // Применяем правила после загрузки данных
                 setTimeout(applyReplacements, 50);
                 setTimeout(applyReplacements, 200);
                 setTimeout(applyReplacements, 500);
@@ -1905,10 +1915,12 @@ const selectorReplacementScript = `
             return originalXHROpen.apply(this, arguments);
         };
         
+        // Перехват Fetch API
         const originalFetch = window.fetch;
         window.fetch = async function() {
             const result = await originalFetch.apply(this, arguments);
             
+            // Применяем правила после fetch запроса
             setTimeout(applyReplacements, 50);
             setTimeout(applyReplacements, 200);
             setTimeout(applyReplacements, 500);
@@ -1919,14 +1931,18 @@ const selectorReplacementScript = `
         console.log('Перехват сетевых запросов установлен');
     }
     
+    // Отслеживание изменений URL
     function trackURLChanges() {
+        // Проверяем URL каждые 100мс
         setInterval(() => {
             const newURL = window.location.href;
             if (newURL !== currentURL) {
                 console.log('URL изменился:', currentURL, '->', newURL);
                 currentURL = newURL;
                 
+                // Перезагружаем правила для нового URL
                 loadRules().then(() => {
+                    // Применяем новые правила несколько раз
                     applyReplacements();
                     setTimeout(applyReplacements, 100);
                     setTimeout(applyReplacements, 300);
@@ -1936,6 +1952,7 @@ const selectorReplacementScript = `
             }
         }, 100);
         
+        // Также отслеживаем события popstate
         window.addEventListener('popstate', () => {
             setTimeout(() => {
                 currentURL = window.location.href;
@@ -1946,7 +1963,9 @@ const selectorReplacementScript = `
         console.log('Отслеживание URL запущено');
     }
     
+    // Регулярное применение правил для надежности
     function startRegularReplacement() {
+        // Применяем правила каждые 500мс
         setInterval(() => {
             if (replacementRules.length > 0) {
                 applyReplacements();
@@ -1956,12 +1975,15 @@ const selectorReplacementScript = `
         console.log('Регулярное применение правил запущено');
     }
     
+    // Инициализация системы подмены
     async function initialize() {
         console.log('Инициализация системы подмены селекторов...');
         
+        // Загружаем правила для текущей страницы
         const rulesLoaded = await loadRules();
         
         if (rulesLoaded) {
+            // Сразу применяем правила несколько раз
             applyReplacements();
             setTimeout(applyReplacements, 100);
             setTimeout(applyReplacements, 300);
@@ -1969,6 +1991,7 @@ const selectorReplacementScript = `
             setTimeout(applyReplacements, 1000);
             setTimeout(applyReplacements, 2000);
             
+            // Запускаем все системы мониторинга
             startDOMObserver();
             interceptNetworkRequests();
             trackURLChanges();
@@ -1981,12 +2004,14 @@ const selectorReplacementScript = `
         }
     }
     
+    // Запуск инициализации
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initialize);
     } else {
         initialize();
     }
     
+    // Дополнительная инициализация через 1 секунду для надежности
     setTimeout(initialize, 1000);
 })();
 </script>
