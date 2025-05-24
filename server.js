@@ -48,6 +48,80 @@ try {
     console.error('❌ Ошибка при загрузке правил подмены:', err);
 }
 
+// Функция для нормализации URL с правильным экранированием звездочки
+function normalizeUrl(url) {
+    try {
+        // Сначала декодируем URL, чтобы получить чистые символы
+        let decodedUrl = decodeURIComponent(url);
+        
+        // Разбиваем URL на части
+        const urlParts = decodedUrl.split('?');
+        const basePart = urlParts[0];
+        const queryPart = urlParts[1];
+        
+        // Обрабатываем базовую часть URL
+        let normalizedBase = basePart;
+        
+        // Заменяем звездочку на правильную кодировку
+        normalizedBase = normalizedBase.replace(/★/g, '%E2%98%85');
+        
+        // Кодируем другие специальные символы правильно
+        const pathSegments = normalizedBase.split('/');
+        const normalizedSegments = pathSegments.map((segment, index) => {
+            // Не кодируем протокол и хост
+            if (index < 3) return segment;
+            
+            // Для остальных сегментов применяем кодирование
+            return encodeURIComponent(decodeURIComponent(segment))
+                .replace(/%E2%98%85/g, '%E2%98%85') // Сохраняем звездочку в правильной кодировке
+                .replace(/★/g, '%E2%98%85'); // На случай если звездочка прошла через кодирование
+        });
+        
+        normalizedBase = normalizedSegments.join('/');
+        
+        // Если есть query параметры, добавляем их обратно
+        if (queryPart) {
+            // Кодируем query параметры правильно
+            const queryParams = queryPart.split('&').map(param => {
+                const [key, value] = param.split('=');
+                if (value) {
+                    return encodeURIComponent(decodeURIComponent(key)) + '=' + 
+                           encodeURIComponent(decodeURIComponent(value));
+                }
+                return encodeURIComponent(decodeURIComponent(key));
+            });
+            
+            return normalizedBase + '?' + queryParams.join('&');
+        }
+        
+        return normalizedBase;
+    } catch (e) {
+        console.error('Ошибка нормализации URL:', e);
+        // В случае ошибки возвращаем исходный URL
+        return url;
+    }
+}
+
+// Функция для сравнения URL с учетом нормализации
+function urlsMatch(url1, url2) {
+    try {
+        const normalized1 = normalizeUrl(url1);
+        const normalized2 = normalizeUrl(url2);
+        
+        // Сначала точное сравнение
+        if (normalized1 === normalized2) return true;
+        
+        // Сравнение без query параметров
+        const base1 = normalized1.split('?')[0];
+        const base2 = normalized2.split('?')[0];
+        
+        return base1 === base2;
+    } catch (e) {
+        console.error('Ошибка сравнения URL:', e);
+        return url1 === url2;
+    }
+}
+
 // Функция для сохранения правил в файл
 function saveRulesToFile() {
     try {
@@ -597,7 +671,7 @@ const adminAuth = (req, res, next) => {
     next(); // Пропускаем всех пользователей без аутентификации
 };
 
-// НОВОЕ: Модифицированная версия админ-панели с возможностью указать оригинальное значение
+// ОБНОВЛЕНО: Упрощенная админ-панель без поля оригинального значения
 app.get('/admin', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -715,8 +789,8 @@ app.get('/admin', (req, res) => {
             <div id="messageContainer"></div>
             
             <div class="info-block">
-                <p><strong>Важно!</strong> Для корректной работы подмены на динамических сайтах укажите оригинальное значение, которое нужно заменить.</p>
-                <p>Если указать оригинальное значение, подмена будет применяться только к элементам, содержащим именно это значение, а не ко всем элементам с указанным селектором.</p>
+                <p><strong>Информация:</strong> Система автоматически заменит содержимое всех элементов, найденных по указанному CSS селектору.</p>
+                <p><strong>Важно:</strong> Символ звездочки (★) в URL будет автоматически преобразован в правильную кодировку %E2%98%85</p>
             </div>
             
             <h2>Добавить правило подмены</h2>
@@ -724,14 +798,11 @@ app.get('/admin', (req, res) => {
                 <div class="form-group">
                     <label for="page">URL страницы:</label>
                     <input type="text" id="page" name="page" placeholder="https://market-csgo.co/ru/Gloves/★%20Driver%20Gloves%20%7C%20Racing%20Green%20%28Well-Worn%29?id=6884780475" required>
+                    <small id="urlPreview" style="color: #666; font-size: 12px; margin-top: 5px; display: block;"></small>
                 </div>
                 <div class="form-group">
                     <label for="selector">CSS-селектор:</label>
                     <input type="text" id="selector" name="selector" placeholder="#app > app-main-site > div > app-full-inventory-info > div > app-page-inventory-info-wrap > div > app-page-inventory-price > div > span:nth-child(1)" required>
-                </div>
-                <div class="form-group">
-                    <label for="originalValue">Оригинальное значение (важно для динамических сайтов):</label>
-                    <input type="text" id="originalValue" name="originalValue" placeholder="4212,62₽">
                 </div>
                 <div class="form-group">
                     <label for="value">Новое значение:</label>
@@ -749,7 +820,6 @@ app.get('/admin', (req, res) => {
                         <th>ID</th>
                         <th>URL страницы</th>
                         <th>CSS-селектор</th>
-                        <th>Оригинальное значение</th>
                         <th>Новое значение</th>
                         <th>Действия</th>
                     </tr>
@@ -761,6 +831,77 @@ app.get('/admin', (req, res) => {
         </div>
         
         <script>
+            // Функция для нормализации URL (аналогичная серверной)
+            function normalizeUrl(url) {
+                try {
+                    // Сначала декодируем URL, чтобы получить чистые символы
+                    let decodedUrl = decodeURIComponent(url);
+                    
+                    // Разбиваем URL на части
+                    const urlParts = decodedUrl.split('?');
+                    const basePart = urlParts[0];
+                    const queryPart = urlParts[1];
+                    
+                    // Обрабатываем базовую часть URL
+                    let normalizedBase = basePart;
+                    
+                    // Заменяем звездочку на правильную кодировку
+                    normalizedBase = normalizedBase.replace(/★/g, '%E2%98%85');
+                    
+                    // Кодируем другие специальные символы правильно
+                    const pathSegments = normalizedBase.split('/');
+                    const normalizedSegments = pathSegments.map((segment, index) => {
+                        // Не кодируем протокол и хост
+                        if (index < 3) return segment;
+                        
+                        // Для остальных сегментов применяем кодирование
+                        return encodeURIComponent(decodeURIComponent(segment))
+                            .replace(/%E2%98%85/g, '%E2%98%85') // Сохраняем звездочку в правильной кодировке
+                            .replace(/★/g, '%E2%98%85'); // На случай если звездочка прошла через кодирование
+                    });
+                    
+                    normalizedBase = normalizedSegments.join('/');
+                    
+                    // Если есть query параметры, добавляем их обратно
+                    if (queryPart) {
+                        // Кодируем query параметры правильно
+                        const queryParams = queryPart.split('&').map(param => {
+                            const [key, value] = param.split('=');
+                            if (value) {
+                                return encodeURIComponent(decodeURIComponent(key)) + '=' + 
+                                       encodeURIComponent(decodeURIComponent(value));
+                            }
+                            return encodeURIComponent(decodeURIComponent(key));
+                        });
+                        
+                        return normalizedBase + '?' + queryParams.join('&');
+                    }
+                    
+                    return normalizedBase;
+                } catch (e) {
+                    console.error('Ошибка нормализации URL:', e);
+                    return url;
+                }
+            }
+            
+            // Функция для отображения превью нормализованного URL
+            function updateUrlPreview() {
+                const urlInput = document.getElementById('page');
+                const urlPreview = document.getElementById('urlPreview');
+                
+                if (urlInput.value.trim()) {
+                    const normalizedUrl = normalizeUrl(urlInput.value);
+                    if (normalizedUrl !== urlInput.value) {
+                        urlPreview.textContent = 'Будет сохранено как: ' + normalizedUrl;
+                        urlPreview.style.color = '#31708f';
+                    } else {
+                        urlPreview.textContent = '';
+                    }
+                } else {
+                    urlPreview.textContent = '';
+                }
+            }
+            
             // Функция для отображения сообщений
             function showMessage(message, isError = false) {
                 const container = document.getElementById('messageContainer');
@@ -790,7 +931,7 @@ app.get('/admin', (req, res) => {
                     
                     if (rules.length === 0) {
                         const row = document.createElement('tr');
-                        row.innerHTML = '<td colspan="6">Нет правил подмены</td>';
+                        row.innerHTML = '<td colspan="5">Нет правил подмены</td>';
                         tableBody.appendChild(row);
                         return;
                     }
@@ -801,7 +942,6 @@ app.get('/admin', (req, res) => {
                             <td>\${rule.id}</td>
                             <td class="truncate" title="\${rule.page}">\${rule.page}</td>
                             <td class="truncate" title="\${rule.selector}">\${rule.selector}</td>
-                            <td>\${rule.originalValue || '(не указано)'}</td>
                             <td>\${rule.value}</td>
                             <td>
                                 <button class="delete-btn" data-id="\${rule.id}">Удалить</button>
@@ -877,12 +1017,15 @@ app.get('/admin', (req, res) => {
                 const formData = {
                     page: document.getElementById('page').value,
                     selector: document.getElementById('selector').value,
-                    value: document.getElementById('value').value,
-                    originalValue: document.getElementById('originalValue').value || '' // Может быть пустым
+                    value: document.getElementById('value').value
                 };
                 
                 await addRule(formData);
             });
+            
+            // Добавляем обработчик для превью URL
+            document.getElementById('page').addEventListener('input', updateUrlPreview);
+            document.getElementById('page').addEventListener('blur', updateUrlPreview);
             
             // Загружаем правила при загрузке страницы
             document.addEventListener('DOMContentLoaded', loadRules);
@@ -892,30 +1035,31 @@ app.get('/admin', (req, res) => {
     `);
 });
 
-// НОВОЕ: API для админ-панели
-// НОВОЕ: Упрощенная и улучшенная логика для получения правил
+// ОБНОВЛЕНО: API для админ-панели без originalValue с нормализацией URL
 app.get('/admin-api/selector-rules', (req, res) => {
     try {
         const page = req.query.page;
         
         // Если указан параметр page, возвращаем правила для этой страницы
         if (page) {
+            const normalizedRequestUrl = normalizeUrl(page);
+            console.log('Поиск правил для нормализованного URL:', normalizedRequestUrl);
+            
             const matchingRules = Array.from(selectorRules.values())
                 .filter(rule => {
-                    // Сначала проверяем точное совпадение URL
-                    if (rule.page === page) return true;
+                    const normalizedRuleUrl = normalizeUrl(rule.page);
                     
-                    // Затем проверяем базовое совпадение URL без параметров
-                    const pageBase = page.split('?')[0];
-                    const ruleBase = rule.page.split('?')[0];
+                    // Используем новую функцию сравнения URL
+                    if (urlsMatch(normalizedRequestUrl, normalizedRuleUrl)) {
+                        console.log('Найдено совпадение:', normalizedRuleUrl);
+                        return true;
+                    }
                     
-                    if (pageBase === ruleBase) return true;
-                    
-                    // Наконец, проверяем совпадение по регулярному выражению
+                    // Проверяем совпадение по регулярному выражению
                     if (rule.page.startsWith('/') && rule.page.endsWith('/')) {
                         try {
                             const regex = new RegExp(rule.page.substring(1, rule.page.length - 1));
-                            return regex.test(page);
+                            return regex.test(normalizedRequestUrl);
                         } catch (e) {
                             console.error('Invalid regex in rule:', rule.page);
                             return false;
@@ -925,6 +1069,7 @@ app.get('/admin-api/selector-rules', (req, res) => {
                     return false;
                 });
             
+            console.log(`Найдено ${matchingRules.length} правил для URL`);
             return res.json(matchingRules);
         }
         
@@ -937,7 +1082,7 @@ app.get('/admin-api/selector-rules', (req, res) => {
     }
 });
 
-// НОВОЕ: API для админ-панели с сохранением оригинального значения для селектора
+// ОБНОВЛЕНО: API для добавления правил без originalValue с нормализацией URL
 app.post('/admin-api/selector-rules', (req, res) => {
     try {
         const { page, selector, value } = req.body;
@@ -947,26 +1092,25 @@ app.post('/admin-api/selector-rules', (req, res) => {
             return res.status(400).json({ message: 'Все поля обязательны для заполнения' });
         }
         
-        // Получаем оригинальное значение для сохранения
-        // В запросе может прийти оригинальное значение, если пользователь его указал
-        const originalValue = req.body.originalValue || '';
+        // Нормализуем URL для правильного сохранения
+        const normalizedPage = normalizeUrl(page);
+        console.log('Сохранение правила с нормализованным URL:', page, '->', normalizedPage);
         
         // Создаем ID для правила
         const id = Date.now().toString(36) + Math.random().toString(36).substring(2, 5);
         
-        // Добавляем правило с сохранением оригинального значения
+        // Добавляем правило с нормализованным URL
         selectorRules.set(id, { 
             id, 
-            page, 
+            page: normalizedPage, // Сохраняем нормализованный URL
             selector, 
-            value,
-            originalValue // Сохраняем оригинальное значение для точного сопоставления
+            value
         });
         
         // Сохраняем правила в файл
         saveRulesToFile();
         
-        res.status(201).json({ id, page, selector, value, originalValue });
+        res.status(201).json({ id, page: normalizedPage, selector, value });
     } catch (error) {
         console.error('Error adding selector rule:', error);
         res.status(500).json({ message: 'Ошибка при добавлении правила подмены' });
@@ -1800,7 +1944,7 @@ const proxyScript = `
 </script>
 `;
 
-// АГРЕССИВНАЯ СИСТЕМА ПОДМЕНЫ для SPA с динамической загрузкой
+// ОБНОВЛЕНО: Упрощенная система подмены без проверки оригинального значения
 const selectorReplacementScript = `
 <script type="text/javascript">
 // Система подмены для SPA с динамической загрузкой
@@ -1809,10 +1953,66 @@ const selectorReplacementScript = `
     let isActive = false;
     let currentURL = window.location.href;
     
+    // Функция для нормализации URL (аналогичная серверной)
+    function normalizeUrl(url) {
+        try {
+            // Сначала декодируем URL, чтобы получить чистые символы
+            let decodedUrl = decodeURIComponent(url);
+            
+            // Разбиваем URL на части
+            const urlParts = decodedUrl.split('?');
+            const basePart = urlParts[0];
+            const queryPart = urlParts[1];
+            
+            // Обрабатываем базовую часть URL
+            let normalizedBase = basePart;
+            
+            // Заменяем звездочку на правильную кодировку
+            normalizedBase = normalizedBase.replace(/★/g, '%E2%98%85');
+            
+            // Кодируем другие специальные символы правильно
+            const pathSegments = normalizedBase.split('/');
+            const normalizedSegments = pathSegments.map((segment, index) => {
+                // Не кодируем протокол и хост
+                if (index < 3) return segment;
+                
+                // Для остальных сегментов применяем кодирование
+                return encodeURIComponent(decodeURIComponent(segment))
+                    .replace(/%E2%98%85/g, '%E2%98%85') // Сохраняем звездочку в правильной кодировке
+                    .replace(/★/g, '%E2%98%85'); // На случай если звездочка прошла через кодирование
+            });
+            
+            normalizedBase = normalizedSegments.join('/');
+            
+            // Если есть query параметры, добавляем их обратно
+            if (queryPart) {
+                // Кодируем query параметры правильно
+                const queryParams = queryPart.split('&').map(param => {
+                    const [key, value] = param.split('=');
+                    if (value) {
+                        return encodeURIComponent(decodeURIComponent(key)) + '=' + 
+                               encodeURIComponent(decodeURIComponent(value));
+                    }
+                    return encodeURIComponent(decodeURIComponent(key));
+                });
+                
+                return normalizedBase + '?' + queryParams.join('&');
+            }
+            
+            return normalizedBase;
+        } catch (e) {
+            console.error('Ошибка нормализации URL:', e);
+            return url;
+        }
+    }
+    
     // Функция для загрузки правил подмены
     async function loadRules() {
         try {
-            const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(currentURL), {
+            const normalizedCurrentURL = normalizeUrl(currentURL);
+            console.log('Загружаем правила для нормализованного URL:', normalizedCurrentURL);
+            
+            const response = await fetch('/admin-api/selector-rules?page=' + encodeURIComponent(normalizedCurrentURL), {
                 method: 'GET',
                 credentials: 'include'
             });
@@ -1829,7 +2029,7 @@ const selectorReplacementScript = `
         return false;
     }
     
-    // Функция для применения правил подмены
+    // УПРОЩЕНО: Функция для применения правил подмены без проверки оригинального значения
     function applyReplacements() {
         if (!replacementRules.length) return;
         
@@ -1838,23 +2038,9 @@ const selectorReplacementScript = `
                 const elements = document.querySelectorAll(rule.selector);
                 
                 elements.forEach(element => {
-                    // Проверяем, нужно ли применять правило
-                    let shouldReplace = false;
-                    
-                    if (rule.originalValue && rule.originalValue.trim()) {
-                        // Если указано оригинальное значение, проверяем совпадение
-                        if (element.innerHTML.trim() === rule.originalValue.trim()) {
-                            shouldReplace = true;
-                        }
-                    } else {
-                        // Если оригинальное значение не указано, всегда подменяем
-                        shouldReplace = true;
-                    }
-                    
-                    if (shouldReplace) {
-                        element.innerHTML = rule.value;
-                        console.log('Подменено значение:', rule.selector, '->', rule.value);
-                    }
+                    // Просто заменяем содержимое всех найденных элементов
+                    element.innerHTML = rule.value;
+                    console.log('Подменено значение:', rule.selector, '->', rule.value);
                 });
             } catch (e) {
                 console.error('Ошибка применения правила:', e);
@@ -1936,7 +2122,7 @@ const selectorReplacementScript = `
                 console.log('URL изменился:', currentURL, '->', newURL);
                 currentURL = newURL;
                 
-                // Перезагружаем правила для нового URL
+                // Перезагружаем правила для нового нормализованного URL
                 loadRules().then(() => {
                     // Применяем новые правила несколько раз
                     applyReplacements();
@@ -2034,7 +2220,8 @@ server.listen(PORT, '0.0.0.0', () => {
     ✓ Content modification
     ✓ Login buttons interception
     ✓ Mixed content prevention
-    ✓ Selector Value Replacement with automatic restore
+    ✓ Simplified Selector Value Replacement (всегда подменяет найденные элементы)
+    ✓ URL Normalization (автоматическое экранирование ★ -> %E2%98%85)
     `);
 });
 
